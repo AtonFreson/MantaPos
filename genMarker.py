@@ -3,18 +3,11 @@ import cv2.aruco as aruco
 import os
 
 calib_dir = './markers'
-
-ARUCO_DICT = cv2.aruco.DICT_6X6_250  # Dictionary ID
-SQUARES_VERTICALLY = 7               # Number of squares vertically
-SQUARES_HORIZONTALLY = 5             # Number of squares horizontally
-SQUARE_LENGTH = 300                   # Square side length (in pixels)
-MARKER_LENGTH = 200                   # ArUco marker side length (in pixels)
-MARGIN_PX = 100                       # Margins size (in pixels)
-
-IMG_SIZE = tuple(i * SQUARE_LENGTH + 2 * MARGIN_PX for i in (SQUARES_VERTICALLY, SQUARES_HORIZONTALLY))
 file_path = 'ChArUco_Marker.png'
 
-def generate_aruco_marker(id, dictionary=aruco.DICT_6X6_250, size=2000):
+ARUCO_DICT = cv2.aruco.DICT_6X6_250  # Dictionary ID
+
+def generate_aruco_marker(id, dictionary=ARUCO_DICT, size=2000):
     # Get the predefined dictionary based on the specified type
     aruco_dict = aruco.getPredefinedDictionary(dictionary)
     
@@ -26,13 +19,16 @@ def generate_aruco_marker(id, dictionary=aruco.DICT_6X6_250, size=2000):
     cv2.imwrite(file_name, marker_image)
     print(f"Marker {id} saved as {file_name}")
 
-def create_and_save_ChArUco_board():
-    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
-    board = cv2.aruco.CharucoBoard((SQUARES_VERTICALLY, SQUARES_HORIZONTALLY), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
-    img = cv2.aruco.CharucoBoard.generateImage(board, IMG_SIZE, marginSize=MARGIN_PX)
+def create_and_save_ChArUco_board(sq_num_pixels, margin_px, mrkr_ratio=0.9, sqs_vert=5, sqs_hor=7):
+    sq_len=50 #length of chessboard grid
+
+    dictionary = aruco.getPredefinedDictionary(ARUCO_DICT)
+    board = aruco.CharucoBoard((sqs_hor, sqs_vert), sq_len, sq_len*mrkr_ratio, dictionary)
+    img_size = tuple((sqs_hor*sq_num_pixels, sqs_vert*sq_num_pixels))
+    img = aruco.CharucoBoard.generateImage(board, img_size, marginSize=margin_px)
     
-    #file_path = os.path.join(calib_dir, file_path)
-    cv2.imwrite(file_path, img)
+    file_name = os.path.join(calib_dir, file_path)
+    cv2.imwrite(file_name, img)
 
 # Generate Aruco marker with ID 42, and forward
 if __name__ == "__main__":
@@ -40,6 +36,5 @@ if __name__ == "__main__":
     if not os.path.exists(calib_dir):
         os.makedirs(calib_dir)
 
-    #for i in range(0,16):
-    #    generate_aruco_marker(42+i)
-    create_and_save_ChArUco_board()
+    for i in range(0,16):
+        generate_aruco_marker(42+i)

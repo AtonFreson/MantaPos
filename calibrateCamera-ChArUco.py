@@ -4,6 +4,7 @@ import os
 import time
 import mantaPosLib as manta
 import shutil
+import genMarker
 
 # Set the selected camera: gopro or axis.
 CAMERA_TYPE = "axis"
@@ -11,10 +12,19 @@ CAMERA_INPUT = 2 # OBS Virtual Camera
 
 delay_time = 0.5 # 500ms delay between capture
 
-# ArUco marker settings
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
-detector_params = cv2.aruco.DetectorParameters()
-detector = cv2.aruco.ArucoDetector(aruco_dict, detector_params)
+squares_vertically = 5
+squares_horizontally = 7
+square_pixels = 200 # Pixel size of the square
+grid_edge = 30 # Pixel margin of ChArUco grid
+marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares, recommended maximum 0.85
+square_lenght = 5 # Real world length of square
+
+# Define the aruco dictionary, charuco board and detector
+marker_length = square_lenght*marker_ratio
+dictionary = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
+board = cv2.aruco.CharucoBoard((squares_vertically, squares_horizontally), square_lenght, marker_length, dictionary)
+params = cv2.aruco.DetectorParameters()
+detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
 cap = cv2.VideoCapture(CAMERA_INPUT)
@@ -36,54 +46,19 @@ if os.path.exists(snapshot_dir):
     shutil.rmtree(snapshot_dir)
 os.makedirs(snapshot_dir)
 
-# Display the marker grid
+# Generate and display the marker grid
+genMarker.create_and_save_ChArUco_board(square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
 manta.display_marker_grid(board_type="ChArUco")
 
-# Prepare object points for calibration (assuming a square ArUco marker layout)
-marker_length = 0.0495  # The real-world size of each marker in meters
-object_points = np.array([[0, 0, 0], [marker_length, 0, 0], [marker_length, marker_length, 0], [0, marker_length, 0]], dtype=np.float32)
-
 # Lists to store object points (3D) and image points (2D)
-all_object_points = []  # 3D points in real world
-all_image_points = []   # 2D points in image plane
+all_charuco_ids = []
+all_charuco_corners = []
 
 # Start capturing camera frames
 next_snapshot_time = time.time() + 0.5  # First snapshot in 500ms
 snapshot_counter = 0
 
 print("Press 'q' to quit the program.")
-
-def get_calibration_parameters(img_dir):
-    # Define the aruco dictionary, charuco board and detector
-    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
-    board = cv2.aruco.CharucoBoard((SQUARES_VERTICALLY, SQUARES_HORIZONTALLY), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
-    params = cv2.aruco.DetectorParameters()
-    detector = cv2.aruco.ArucoDetector(dictionary, params)
-    
-    # Load images from directory
-    image_files = [os.path.join(img_dir, f) for f in os.listdir(img_dir) if f.endswith(".bmp")]
-    all_charuco_ids = []
-    all_charuco_corners = []
-
-    # Loop over images and extraction of corners
-    for image_file in image_files:
-        image = cv2.imread(image_file)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        imgSize = image.shape
-        image_copy = image.copy()
-        marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(image)
-        
-        if len(marker_ids) > 0: # If at least one marker is detected
-            # cv2.aruco.drawDetectedMarkers(image_copy, marker_corners, marker_ids)
-            ret, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, image, board)
-
-            if charucoIds is not None and len(charucoCorners) > 3:
-                all_charuco_corners.append(charucoCorners)
-                all_charuco_ids.append(charucoIds)
-    
-    # Calibrate camera with extracted information
-    result, mtx, dist, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(all_charuco_corners, all_charuco_ids, board, imgSize, None, None)
-    return mtx, dist
 
 
 while True:
@@ -97,16 +72,16 @@ while True:
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Detect markers in the frame using the ArUcoDetector class
-    corners, ids, rejected_img_points = detector.detectMarkers(gray_frame)
+    marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(gray_frame)
 
-    if ids is not None:
+    if marker_ids is not None:
         # Censor the markers
-        frame = manta.censor_marker(frame, corners, "diamond")
+        frame = manta.censor_marker(frame, marker_corners, "diamond")
         # Draw the markers on the frame for visual feedback
-        cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+        cv2.aruco.drawDetectedMarkers(frame, marker_corners, marker_ids)
 
         # If at least 2 markers are detected, save the frame
-        if len(ids) >= 2 and time.time() >= next_snapshot_time:
+        if len(marker_ids) >= 2 and time.time() >= next_snapshot_time:
             # Save the frame to the snapshots folder
             snapshot_filename = os.path.join(snapshot_dir, f'snapshot_{snapshot_counter:04d}.png')
             cv2.imwrite(snapshot_filename, gray_frame)
@@ -114,9 +89,11 @@ while True:
             snapshot_counter += 1
 
             # Save detected marker corners (for calibration)
-            for corner in corners:
-                all_image_points.append(corner)
-                all_object_points.append(object_points)
+            ret, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, gray_frame, board)
+
+            if charucoIds is not None and len(charucoCorners) > 3:
+                all_charuco_corners.append(charucoCorners)
+                all_charuco_ids.append(charucoIds)
 
             next_snapshot_time = time.time() + delay_time  # Wait another X ms before the next snapshot
 
@@ -134,13 +111,12 @@ cap.release()
 cv2.destroyAllWindows()
 
 # Calibration using the saved snapshots
-if all_object_points and all_image_points:
+if all_charuco_corners and all_charuco_ids:
     # Perform camera calibration
     print("Calibrating...")
-    ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
-        all_object_points, all_image_points, gray_frame.shape[:2], None, None, flags = cv2.CALIB_USE_LU
-    )
-
+    result, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
+        all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)#, flags = cv2.CALIB_USE_LU)
+    
     # Save calibration data
     match CAMERA_TYPE:
         case "axis":

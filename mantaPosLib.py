@@ -17,7 +17,7 @@ def display_marker_grid(num_markers=0, marker_size=200, border_size=25, board_ty
             calibration_image_dir = './markers'
 
             # Get the list of marker image files and sort them numerically by index
-            marker_image_files = [os.path.join(calibration_image_dir, f) for f in os.listdir(calibration_image_dir) if f.endswith('.png')]
+            marker_image_files = [os.path.join(calibration_image_dir, f) for f in os.listdir(calibration_image_dir) if f.endswith('.png') and f.find('aruco_marker') != -1]
             marker_image_files.sort(key=extract_index)
 
             # Extract the first marker (smallest index) for reference
@@ -81,7 +81,7 @@ def display_marker_grid(num_markers=0, marker_size=200, border_size=25, board_ty
             return grid_size, first_marker
 
         case "ChArUco":
-            calibration_image_dir = 'ChArUco_Marker.png'
+            calibration_image_dir = './markers/ChArUco_Marker.png'
             grid_image = cv2.imread(calibration_image_dir)
             cv2.imshow('ChArUco Marker Grid', grid_image)
             cv2.resizeWindow('ChArUco Marker Grid', grid_image.shape[1], grid_image.shape[0])
