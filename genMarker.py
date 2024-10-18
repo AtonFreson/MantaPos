@@ -5,7 +5,7 @@ import os
 calib_dir = './markers'
 file_path = 'ChArUco_Marker.png'
 
-ARUCO_DICT = cv2.aruco.DICT_6X6_250  # Dictionary ID
+ARUCO_DICT = cv2.aruco.DICT_5X5_50  # Dictionary ID
 
 def generate_aruco_marker(id, dictionary=ARUCO_DICT, size=2000):
     # Get the predefined dictionary based on the specified type
@@ -24,7 +24,7 @@ def create_and_save_ChArUco_board(sq_num_pixels, margin_px, mrkr_ratio=0.9, sqs_
 
     dictionary = aruco.getPredefinedDictionary(ARUCO_DICT)
     board = aruco.CharucoBoard((sqs_hor, sqs_vert), sq_len, sq_len*mrkr_ratio, dictionary)
-    img_size = tuple((sqs_hor*sq_num_pixels, sqs_vert*sq_num_pixels))
+    img_size = tuple((sqs_hor*sq_num_pixels + margin_px*2, sqs_vert*sq_num_pixels + margin_px*2))
     img = aruco.CharucoBoard.generateImage(board, img_size, marginSize=margin_px)
     
     file_name = os.path.join(calib_dir, file_path)

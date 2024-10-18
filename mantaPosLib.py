@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 import re
+from scipy.spatial.transform import Rotation as R
 
 # Function to extract the numerical index from the filename
 def extract_index(filename):
@@ -93,6 +94,8 @@ def resize_window_with_aspect_ratio(window_name, frame):
     # Get current window size
     frame_height, frame_width = frame.shape[:2]
     window_width, window_height = cv2.getWindowImageRect(window_name)[2:4]
+    if window_height == 0: window_height=1
+    if window_width == 0: window_width=1
     
     # Calculate the aspect ratio of the frame
     aspect_ratio = frame_width / float(frame_height)
@@ -178,3 +181,85 @@ def censor_marker(frame, corners, type = "blur"):
                 cv2.fillConvexPoly(frame, inner_pts, (0, 0, 0))  # Fill the inner area with black
 
     return frame
+
+# Function to calculate the global position and rotation of the camera based on multiple markers, 
+# and display it overlaid on the video feed, together with the standard deviation of the estimates  
+def display_position(frame, tvec_list, rvec_list, marker_pos_rot, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8,
+                     text_color=(0, 255, 0), thickness=1, alpha=0.5, rect_padding=(10, 10, 600, 150)):
+    
+    # Display only if tags are visible
+    if len(tvec_list) == 0:
+        return
+    
+    camera_positions = []
+    euler_angles = []
+
+    for i in range(len(rvec_list)):
+        # From solvePnP: Pose of marker in camera coordinate system
+        rvec = rvec_list[i]
+        tvec = tvec_list[i]
+
+        # Convert rotation vector to rotation matrix
+        R_marker_camera, _ = cv2.Rodrigues(rvec)
+        t_marker_camera = tvec.reshape((3, 1))
+
+        # Invert the transformation to get pose of camera in marker coordinate system
+        R_camera_marker = R_marker_camera.T
+        t_camera_marker = -R_marker_camera.T @ t_marker_camera
+
+        # Get marker pose in global coordinates
+        x, y, z = marker_pos_rot[i][0]
+        roll_deg, pitch_deg, yaw_deg = marker_pos_rot[i][1]
+
+        # Convert roll, pitch, yaw from degrees to radians
+        roll = np.deg2rad(roll_deg)
+        pitch = np.deg2rad(pitch_deg)
+        yaw = np.deg2rad(yaw_deg)
+
+        # Compute rotation matrix from global to marker coordinate system
+        R_marker_global = R.from_euler('xyz', [roll, pitch, yaw]).as_matrix()
+        t_marker_global = np.array([x, y, z]).reshape((3, 1))
+
+        # Compute camera pose in global coordinates
+        R_camera_global = R_marker_global @ R_camera_marker
+        t_camera_global = R_marker_global @ t_camera_marker + t_marker_global
+
+        # Convert rotation matrix to Euler angles (in degrees)
+        euler_angles_global = R.from_matrix(R_camera_global).as_euler('xyz', degrees=True)
+
+        # Store camera position and orientation
+        camera_positions.append(t_camera_global.flatten())
+        euler_angles.append(euler_angles_global)
+
+    # Now, compute mean and standard deviation
+    camera_positions = np.array(camera_positions)
+    position = np.mean(camera_positions, axis=0)
+    position_std = np.std(camera_positions, axis=0)
+
+    euler_angles = np.array(euler_angles)
+    rotation = np.mean(euler_angles, axis=0)
+    rotation_std = np.std(euler_angles, axis=0)
+
+    # Create a position text with fixed-width formatting to prevent text shifting
+    position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={-position[1]: >+6.3f}m, Z={-position[2]: >+6.3f}m")
+    rotation_text = (f"Rot: R={rotation[0]: >+6.3f}', P={rotation[1]: >+6.3f}', Y={rotation[2]: >+6.3f}'")
+    position_std_text = (f"-Std: X={position_std[0]: >6.3f}m, Y={position_std[1]: >6.3f}m, Z={position_std[2]: >6.3f}m")
+    rotation_std_text = (f"-Std: R={rotation_std[0]: >6.3f}', P={rotation_std[1]: >6.3f}', Y={rotation_std[2]: >6.3f}'")
+
+    # Unpack rectangle bounds
+    x, y, w, h = rect_padding
+
+    # Create a copy of the frame for overlay
+    overlay = frame.copy()
+
+    # Draw the rectangle
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
+
+    # Put text on the overlay
+    cv2.putText(overlay, position_text, (x+20, y + int(h / 4.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, position_std_text, (x+20, y + int(h / 2.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_text, (x+20, y + int(h / 1.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_std_text, (x+20, y + int(h / 1.2)), font, font_scale, text_color, thickness)
+
+    # Apply the overlay
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)

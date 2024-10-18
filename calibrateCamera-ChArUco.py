@@ -14,20 +14,22 @@ delay_time = 0.5 # 500ms delay between capture
 
 squares_vertically = 5
 squares_horizontally = 7
-square_pixels = 200 # Pixel size of the square
-grid_edge = 30 # Pixel margin of ChArUco grid
-marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares, recommended maximum 0.85
-square_lenght = 5 # Real world length of square
+square_pixels = 200 # Pixel size of the chessboard squares
+grid_edge = 30 # Pixel margin outside the ChArUco grid
+marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
+square_length = 5 # Real world length of square in meters
 
 # Define the aruco dictionary, charuco board and detector
-marker_length = square_lenght*marker_ratio
+marker_length = square_length*marker_ratio
 dictionary = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
-board = cv2.aruco.CharucoBoard((squares_vertically, squares_horizontally), square_lenght, marker_length, dictionary)
+board = cv2.aruco.CharucoBoard((squares_horizontally, squares_vertically), square_length, marker_length, dictionary)
 params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
 cap = cv2.VideoCapture(CAMERA_INPUT)
+cv2.namedWindow("Camera Preview", cv2.WINDOW_NORMAL) 
+
 match CAMERA_TYPE:
     case "axis":
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
@@ -35,7 +37,6 @@ match CAMERA_TYPE:
     case "gopro":
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-cv2.namedWindow("Camera Preview", cv2.WINDOW_NORMAL) 
 if not cap.isOpened():
     print("Error: Could not open camera",CAMERA_INPUT)
     exit()
@@ -45,6 +46,11 @@ snapshot_dir = './snapshots'
 if os.path.exists(snapshot_dir):
     shutil.rmtree(snapshot_dir)
 os.makedirs(snapshot_dir)
+
+# Prepare to save the created calibration file
+calibration_dir = './camera_calibrations'
+if not os.path.exists(calibration_dir):
+    os.makedirs(calibration_dir)
 
 # Generate and display the marker grid
 genMarker.create_and_save_ChArUco_board(square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
@@ -81,21 +87,21 @@ while True:
         cv2.aruco.drawDetectedMarkers(frame, marker_corners, marker_ids)
 
         # If at least 2 markers are detected, save the frame
-        if len(marker_ids) >= 2 and time.time() >= next_snapshot_time:
-            # Save the frame to the snapshots folder
-            snapshot_filename = os.path.join(snapshot_dir, f'snapshot_{snapshot_counter:04d}.png')
-            cv2.imwrite(snapshot_filename, gray_frame)
-            print(f"Saved snapshot: {snapshot_filename}")
-            snapshot_counter += 1
-
+        if len(marker_ids) >= 2:
             # Save detected marker corners (for calibration)
             ret, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, gray_frame, board)
 
-            if charucoIds is not None and len(charucoCorners) > 3:
+            if charucoIds is not None and len(charucoCorners) > 3 and time.time() >= next_snapshot_time:
+                # Save the frame to the snapshots folder
+                snapshot_filename = os.path.join(snapshot_dir, f'snapshot_{snapshot_counter:04d}.png')
+                cv2.imwrite(snapshot_filename, gray_frame)
+                print(f"Saved snapshot: {snapshot_filename}")
+                snapshot_counter += 1
+
                 all_charuco_corners.append(charucoCorners)
                 all_charuco_ids.append(charucoIds)
 
-            next_snapshot_time = time.time() + delay_time  # Wait another X ms before the next snapshot
+                next_snapshot_time = time.time() + delay_time  # Wait another X ms before the next snapshot
 
     # Display the camera preview
     manta.resize_window_with_aspect_ratio("Camera Preview", frame)
@@ -120,9 +126,9 @@ if all_charuco_corners and all_charuco_ids:
     # Save calibration data
     match CAMERA_TYPE:
         case "axis":
-            np.savez('camera_calibration_axis.npz', camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
+            np.savez(os.path.join(calibration_dir,'camera_calibration_axis.npz'), camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
         case "gopro":
-            np.savez('camera_calibration_gopro.npz', camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
+            np.savez(os.path.join(calibration_dir,'camera_calibration_gopro.npz'), camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
 
     print("Calibration complete.\n")
     print("Camera matrix:\n", camera_matrix)
