@@ -31,6 +31,7 @@ detector = cv2.aruco.ArucoDetector(dictionary, params)
 cap = cv2.VideoCapture(CAMERA_INPUT)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
 
+# Set camera resolution based on the camera type
 match CAMERA_TYPE:
     case "axis":
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
@@ -54,52 +55,15 @@ match CAMERA_TYPE:
 camera_matrix = calibration_data['camera_matrix']
 dist_coeffs = calibration_data['dist_coeffs']
 
-""" def rotation_matrix_to_euler_angles(rotation_matrix):
-    #Convert a rotation matrix to Euler angles (roll, pitch, yaw) in degrees.
-    sy = sqrt(rotation_matrix[0, 0] ** 2 + rotation_matrix[1, 0] ** 2)
-    singular = sy < 1e-6
-
-    if not singular:
-        x = atan2(rotation_matrix[2, 1], rotation_matrix[2, 2])
-        y = atan2(-rotation_matrix[2, 0], sy)
-        z = atan2(rotation_matrix[1, 0], rotation_matrix[0, 0])
-    else:
-        x = atan2(-rotation_matrix[1, 2], rotation_matrix[1, 1])
-        y = atan2(-rotation_matrix[2, 0], sy)
-        z = 0
-
-    # Convert from radians to degrees
-    return np.degrees(np.array([x, y, z]))
-
-def display_position_single(frame, position, euler_angles, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8,
-                            text_color=(0, 255, 0), thickness=2, alpha=0.5, rect_padding=(10, 10, 600, 150)):
-    position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={position[1]: >+6.3f}m, Z={position[2]: >+6.3f}m")
-    rotation_text = (f"Rot: R={euler_angles[0]: >+6.3f}°, P={euler_angles[1]: >+6.3f}°, Y={euler_angles[2]: >+6.3f}°")
-
-    # Unpack rectangle bounds
-    x, y, w, h = rect_padding
-
-    # Create a copy of the frame for overlay
-    overlay = frame.copy()
-
-    # Draw the rectangle
-    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
-
-    # Put text on the overlay
-    cv2.putText(overlay, position_text, (x + 20, y + int(h / 3)), font, font_scale, text_color, thickness)
-    cv2.putText(overlay, rotation_text, (x + 20, y + int(h / 1.5)), font, font_scale, text_color, thickness)
-
-    # Apply the overlay
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame) """
-
 # Precompute board center offset to center the coordinate system
-board_width = (squares_horizontally - 1) * square_length
-board_height = (squares_vertically - 1) * square_length
+board_width = (squares_horizontally - 0) * square_length
+board_height = (squares_vertically - 0) * square_length
 board_center_offset = [
     -board_width / 2,
     -board_height / 2,
     0
 ]
+board_pos = board_center_offset#[0,0,0]  # Position of the marker in meters
 board_rot = [0,0,0]  # Euler rotation of the marker in degrees, origin is normal around z
 
 manta.display_marker_grid(board_type="ChArUco")
@@ -148,24 +112,27 @@ while True:
             )
 
             if success:
+                # Collect object points and image points
+                object_points_all = board.getChessboardCorners()[charuco_ids.flatten()]
+                image_points_all = charuco_corners.reshape(-1, 2)
+
                 # Store translation and rotation vectors
                 tvec_list = []
                 rvec_list = []
                 markers_pos_rot = []
-                
+                # Store the position and rotation of the board
                 tvec_list.append(tvec.flatten())
                 rvec_list.append(rvec.flatten())
-                markers_pos_rot.append([board_center_offset, board_rot])
+                markers_pos_rot.append([board_pos, board_rot])
 
                 # Display position and rotation
                 match CAMERA_TYPE:
                     case "axis":
-                        manta.display_position(frame, tvec_list, rvec_list, markers_pos_rot, font_scale=1.3, thickness=2, rect_padding=(10,10,950,200))
+                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.3, thickness=2, rect_padding=(10,10,950,200))
                     case "axis_low":
-                        manta.display_position(frame, tvec_list, rvec_list, markers_pos_rot)
+                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all)
                     case "gopro":
-                        manta.display_position(frame, tvec_list, rvec_list, markers_pos_rot, font_scale=1.5, thickness=2, rect_padding=(10,10,1100,280))
-
+                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.5, thickness=2, rect_padding=(10,10,1100,280))
                 # Draw axis on the board
                 #cv2.aruco.drawAxis(frame, camera_matrix, dist_coeffs, rvec, tvec, square_length)
 

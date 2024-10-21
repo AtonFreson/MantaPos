@@ -263,3 +263,211 @@ def display_position(frame, tvec_list, rvec_list, marker_pos_rot, font=cv2.FONT_
 
     # Apply the overlay
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+# Computes the standard deviations (errors) for each pose parameter in the global coordinate system.
+def compute_pose_errors_global(rvec, tvec, object_points, image_points, camera_matrix, dist_coeffs,
+                               marker_pos, marker_rot):
+    """
+    Parameters:
+        rvec (np.ndarray): Rotation vector (3x1 or 1x3).
+        tvec (np.ndarray): Translation vector (3x1 or 1x3).
+        object_points (np.ndarray): 3D points in the object coordinate space (Nx3).
+        image_points (np.ndarray): Corresponding 2D points in the image plane (Nx2).
+        camera_matrix (np.ndarray): Camera intrinsic matrix.
+        dist_coeffs (np.ndarray): Distortion coefficients.
+        marker_pos (list or np.ndarray): Marker position in the global coordinate system (3 elements).
+        marker_rot (list or np.ndarray): Marker rotation in degrees (roll, pitch, yaw).
+
+    Returns:
+        position_std_global (np.ndarray): Standard deviations for X, Y, Z in global coordinates (in meters).
+        rotation_std_deg_global (np.ndarray): Standard deviations for roll, pitch, yaw in global coordinates (in degrees).
+    """
+    import numpy as np
+    import cv2
+    from scipy.spatial.transform import Rotation as R
+
+    # Flatten rvec and tvec
+    rvec = rvec.flatten()
+    tvec = tvec.flatten()
+
+    # Prepare pose parameters
+    pose_params = np.hstack((rvec, tvec))
+
+    # Define function to project points
+    def project_points(pose_params, object_points):
+        rvec = pose_params[0:3].reshape(3, 1)
+        tvec = pose_params[3:6].reshape(3, 1)
+        projected_points, _ = cv2.projectPoints(object_points, rvec, tvec, camera_matrix, dist_coeffs)
+        return projected_points.reshape(-1, 2)
+
+    # Compute base projected points
+    base_projected_points = project_points(pose_params, object_points)
+
+    # Number of parameters and points
+    num_params = 6
+    num_points = object_points.shape[0]
+
+    # Initialize Jacobian matrix
+    J = np.zeros((num_points * 2, num_params))
+
+    delta = 1e-6  # Small perturbation
+
+    # Compute Jacobian numerically
+    for i in range(num_params):
+        pose_params_perturbed = pose_params.copy()
+        pose_params_perturbed[i] += delta
+        projected_points_perturbed = project_points(pose_params_perturbed, object_points)
+        diff = (projected_points_perturbed - base_projected_points) / delta  # Numerical derivative
+        # Flatten the differences
+        diff = diff.flatten()
+        J[:, i] = diff
+
+    # Compute residuals
+    residuals = (image_points - base_projected_points).flatten()
+
+    # Degrees of freedom: number of observations minus number of parameters
+    dof = max(0, len(residuals) - num_params)
+
+    # Compute variance of the measurement errors
+    if dof > 0:
+        sigma2 = np.sum(residuals ** 2) / dof
+    else:
+        sigma2 = np.var(residuals)
+
+    # Compute covariance matrix
+    try:
+        Cov_local = np.linalg.inv(J.T @ J) * sigma2
+        # Extract standard deviations
+        param_std = np.sqrt(np.diag(Cov_local))
+        rotation_std_rad_local = param_std[0:3]
+        position_std_local = param_std[3:6]
+    except np.linalg.LinAlgError:
+        # Handle singular matrix
+        rotation_std_rad_local = np.zeros(3)
+        position_std_local = np.zeros(3)
+
+    # Now, transform the covariance matrix to global coordinate system
+
+    # First, compute the transformation matrices
+    # Rotation and translation from marker to global
+    roll_deg, pitch_deg, yaw_deg = marker_rot
+    roll_rad, pitch_rad, yaw_rad = np.deg2rad([roll_deg, pitch_deg, yaw_deg])
+    R_marker_global = R.from_euler('xyz', [roll_rad, pitch_rad, yaw_rad]).as_matrix()
+    t_marker_global = np.array(marker_pos).reshape(3, 1)
+
+    # Rotation and translation from camera to marker (from solvePnP)
+    R_camera_marker, _ = cv2.Rodrigues(rvec)
+    t_camera_marker = tvec.reshape(3, 1)
+
+    # Invert to get transformation from marker to camera
+    R_marker_camera = R_camera_marker.T
+    t_marker_camera = -R_camera_marker.T @ t_camera_marker
+
+    # Total transformation from camera to global
+    R_camera_global = R_marker_global @ R_camera_marker
+    t_camera_global = R_marker_global @ t_camera_marker + t_marker_global
+
+    # Jacobian of the transformation with respect to local pose parameters
+    # Since the transformation is linear for translation and rotational parameters are small, we can approximate
+    # the errors in global coordinates as:
+
+    # For position:
+    position_std_global = np.sqrt(np.sum((R_marker_global @ np.diag(position_std_local))**2, axis=1))
+
+    # For rotation:
+    # Compute the rotation error propagation
+    # For small angles, rotation errors can be transformed using the rotation matrix
+    rotation_std_rad_global = np.sqrt(np.sum((R_marker_global @ np.diag(rotation_std_rad_local))**2, axis=1))
+
+    # Convert rotation errors to degrees
+    rotation_std_deg_global = np.rad2deg(rotation_std_rad_global)
+
+    return position_std_global, rotation_std_deg_global
+
+# Function to display the position and orientation of the camera in the global coordinate system
+def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all,
+                     font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, text_color=(0, 255, 0), thickness=1, alpha=0.5,
+                     rect_padding=(10, 10, 600, 150)):
+    
+    if len(tvec_list) == 0:
+        return
+    
+    camera_positions = []
+    euler_angles = []
+    position_stds = []
+    rotation_stds = []
+
+    for i in range(len(rvec_list)):
+        # From solvePnP: Pose of marker in camera coordinate system
+        rvec = rvec_list[i]
+        tvec = tvec_list[i]
+
+        # Marker position and rotation in global coordinates
+        marker_pos, marker_rot = marker_pos_rot[i]
+        x, y, z = marker_pos
+        roll_deg, pitch_deg, yaw_deg = marker_rot
+
+        # Convert rotation vector to rotation matrix
+        R_marker_camera, _ = cv2.Rodrigues(rvec)
+        t_marker_camera = tvec.reshape((3, 1))
+
+        # Invert the transformation to get pose of camera in marker coordinate system
+        R_camera_marker = R_marker_camera.T
+        t_camera_marker = -R_marker_camera.T @ t_marker_camera
+
+        # Compute rotation matrix from global to marker coordinate system
+        roll_rad, pitch_rad, yaw_rad = np.deg2rad([roll_deg, pitch_deg, yaw_deg])
+        R_marker_global = R.from_euler('xyz', [roll_rad, pitch_rad, yaw_rad]).as_matrix()
+        t_marker_global = np.array([x, y, z]).reshape((3, 1))
+
+        # Compute camera pose in global coordinates
+        R_camera_global = R_marker_global @ R_camera_marker
+        t_camera_global = R_marker_global @ t_camera_marker + t_marker_global
+
+        # Convert rotation matrix to Euler angles (in degrees)
+        euler_angles_global = R.from_matrix(R_camera_global).as_euler('xyz', degrees=True)
+
+        # Store camera position and orientation
+        camera_positions.append(t_camera_global.flatten())
+        euler_angles.append(euler_angles_global)
+
+        # Compute pose errors in global coordinates
+        position_std_global, rotation_std_deg_global = compute_pose_errors_global(
+            rvec, tvec, object_points_all, image_points_all, camera_matrix, dist_coeffs, marker_pos, marker_rot
+        )
+
+        position_stds.append(position_std_global)
+        rotation_stds.append(rotation_std_deg_global)
+
+    # Now, compute mean and standard deviation
+    camera_positions = np.array(camera_positions)
+    position = np.mean(camera_positions, axis=0)
+    position_std = np.mean(position_stds, axis=0)
+
+    euler_angles = np.array(euler_angles)
+    rotation = np.mean(euler_angles, axis=0)
+    rotation_std = np.mean(rotation_stds, axis=0)
+
+    # Create a position text with fixed-width formatting to prevent text shifting
+    position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={-position[1]: >+6.3f}m, Z={-position[2]: >+6.3f}m")
+    rotation_text = (f"Rot: R={rotation[0]: >+6.3f}', P={rotation[1]: >+6.3f}', Y={rotation[2]: >+6.3f}'")
+    position_std_text = (f"-Err: X={position_std[0]: >6.6f}m, Y={position_std[1]: >6.6f}m, Z={position_std[2]: >6.6f}m")
+    rotation_std_text = (f"-Err: R={rotation_std[0]: >6.3f}', P={rotation_std[1]: >6.3f}', Y={rotation_std[2]: >6.3f}'")
+
+    # Unpack rectangle bounds
+    x, y, w, h = rect_padding
+
+    # Create a copy of the frame for overlay
+    overlay = frame.copy()
+
+    # Draw the rectangle
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
+
+    # Put text on the overlay
+    cv2.putText(overlay, position_text, (x+20, y + int(h / 4.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, position_std_text, (x+20, y + int(h / 2.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_text, (x+20, y + int(h / 1.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_std_text, (x+20, y + int(h / 1.2)), font, font_scale, text_color, thickness)
+
+    # Apply the overlay
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
