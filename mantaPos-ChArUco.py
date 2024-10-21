@@ -10,7 +10,7 @@ import genMarker
 # Initialize parameters
 # Set the selected camera: 'gopro' or 'axis'.
 CAMERA_TYPE = "axis"
-CAMERA_INPUT = 2  # Camera index or video file
+CAMERA_INPUT = 1  # Camera index or video file
 
 # ChArUco board settings
 squares_vertically = 5
