@@ -21,9 +21,13 @@ WRITE_INTERVAL = 600
 last_write_time = time.time()
 last_minute_time = time.time()
 
+# Directory for CSV files
+log_dir = 'pressure-test/pressure_logs'
+os.makedirs(log_dir, exist_ok=True)
+
 # File paths for CSV files
-file1 = 'pressure_top.csv'
-file2 = 'pressure_bottom.csv'
+file1 = os.path.join(log_dir, 'pressure_top.csv')
+file2 = os.path.join(log_dir, 'pressure_bottom.csv')
 
 # Ensure that the CSV file has headers only if it doesn't exist
 def initialize_csv_file(file):
