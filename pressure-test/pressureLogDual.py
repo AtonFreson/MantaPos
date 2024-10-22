@@ -5,8 +5,8 @@ import csv
 import os
 
 # Initialize the ADS1115 ADCs with their respective I2C addresses
-adc1 = Adafruit_ADS1x15.ADS1115(address=0x48)
-adc2 = Adafruit_ADS1x15.ADS1115(address=0x49)
+adc1 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x48)
+adc2 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x49)
 
 # Set the gain
 #GAIN = 1
