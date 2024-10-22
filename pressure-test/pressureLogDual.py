@@ -35,7 +35,7 @@ def initialize_csv_file(file):
         with open(file, 'w', newline='') as f:
             writer = csv.writer(f)
             #writer.writerow(['Timestamp', 'Average', 'Standard Deviation', 'Minimum', 'Maximum'])
-            writer.writerow(['Timestamp', 'Average', 'NegStd', 'PosStd', 'Maximum', 'Minimum'])
+            writer.writerow(['Timestamp', 'Average', ' ', 'StdRange', 'Minimum', 'Maximum'])
             
 # Write data to CSV files and clear the data lists
 def write_to_csv():
@@ -87,9 +87,9 @@ try:
             max2 = max(minute_data2)
 
             # Append statistics to the data streams and print them, formatted for excel
-            data_stream1.append([timestamp_str, avg1, avg1-stddev1, stddev1*2, max1, min1])
+            data_stream1.append([timestamp_str, avg1, avg1-stddev1, stddev1*2, min1, max1-min1])
             #data_stream1.append([timestamp_str, avg1, stddev1, min1, max1])
-            data_stream2.append([timestamp_str, avg2, avg2-stddev2, stddev2*2, max2, min2])
+            data_stream2.append([timestamp_str, avg2, avg2-stddev2, stddev2*2, min2, max2-min2])
             #data_stream2.append([timestamp_str, avg2, stddev2, min2, max2])
 
             # Print the statistics
