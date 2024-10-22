@@ -3,6 +3,7 @@ import datetime
 import Adafruit_ADS1x15  # pip install adafruit-ads1x15
 import csv
 import os
+import statistics
 
 # Initialize the ADS1115 ADCs with their respective I2C addresses
 adc1 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x48)
@@ -18,6 +19,7 @@ data_stream2 = []
 # Write interval in seconds (10 minutes)
 WRITE_INTERVAL = 600
 last_write_time = time.time()
+last_minute_time = time.time()
 
 # File paths for CSV files
 file1 = 'pressure_top.csv'
@@ -30,9 +32,27 @@ def initialize_csv_file(file):
             writer = csv.writer(f)
             writer.writerow(['Timestamp', 'ADC_Value'])  # Write CSV header
 
+# Write data to CSV files and clear the data lists
+def write_to_csv():
+    # Write data to CSV files
+    with open(file1, 'a', newline='') as f1:
+        writer1 = csv.writer(f1)
+        writer1.writerows(data_stream1)  # Write all rows for data_stream1
+    with open(file2, 'a', newline='') as f2:
+        writer2 = csv.writer(f2)
+        writer2.writerows(data_stream2)  # Write all rows for data_stream2
+
+    # Clear the data lists after writing
+    data_stream1.clear()
+    data_stream2.clear()
+
 # Initialize both CSV files only if they do not exist
 initialize_csv_file(file1)
 initialize_csv_file(file2)
+
+# Initialize variables for minute data collection
+minute_data1 = []
+minute_data2 = []
 
 try:
     while True:
@@ -44,24 +64,35 @@ try:
         timestamp = time.time()
         timestamp_str = datetime.datetime.fromtimestamp(timestamp).isoformat()
         
-        # Append data to the lists (each row will be [timestamp, value])
-        data_stream1.append([timestamp_str, value1])
-        data_stream2.append([timestamp_str, value2])
+        # Append data to the minute lists
+        minute_data1.append(value1)
+        minute_data2.append(value2)
+        
+        # Check if 60 seconds have passed
+        current_time = time.time()
+        if current_time - last_minute_time >= 60:
+            # Calculate average and standard deviation
+            avg1 = statistics.mean(minute_data1)
+            stddev1 = statistics.stdev(minute_data1)
+            avg2 = statistics.mean(minute_data2)
+            stddev2 = statistics.stdev(minute_data2)
+            
+            # Append statistics to the data streams
+            data_stream1.append([timestamp_str, avg1, stddev1])
+            data_stream2.append([timestamp_str, avg2, stddev2])
+            
+            # Clear the minute data lists
+            minute_data1.clear()
+            minute_data2.clear()
+            
+            # Update the last minute time
+            last_minute_time = current_time
         
         # Check if it's time to write to the files
-        current_time = time.time()
         if current_time - last_write_time >= WRITE_INTERVAL:
             # Write data to CSV files
-            with open(file1, 'a', newline='') as f1:
-                writer1 = csv.writer(f1)
-                writer1.writerows(data_stream1)  # Write all rows for data_stream1
-            with open(file2, 'a', newline='') as f2:
-                writer2 = csv.writer(f2)
-                writer2.writerows(data_stream2)  # Write all rows for data_stream2
-
-            # Clear the data lists after writing
-            data_stream1.clear()
-            data_stream2.clear()
+            print("Writing data to CSV files...")
+            write_to_csv()
             
             # Update the last write time
             last_write_time = current_time
@@ -70,4 +101,6 @@ try:
         time.sleep(1)
 
 except KeyboardInterrupt:
-    print("Data logging stopped by user.")
+    print("Data logging stopped by user, saving data... ", end="")
+    write_to_csv()  # Write any remaining data before exiting
+    print("Saved.")
