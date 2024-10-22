@@ -6,8 +6,8 @@ import os
 import statistics
 
 # Initialize the ADS1115 ADCs with their respective I2C addresses
-adc1 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x48)
-adc2 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x49)
+adc1 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x49)
+adc2 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x48)
 
 # Set the gain
 #GAIN = 1
@@ -89,8 +89,8 @@ try:
             data_stream1.append([timestamp_str, avg1, stddev1, min1, max1])
             data_stream2.append([timestamp_str, avg2, stddev2, min2, max2])
             print(f"Timestamp: {timestamp_str}")
-            print(f"Top Sensor: {avg1:.2f} ± {stddev1:.2f} (min: {min1}, max: {max1})")
-            print(f"Bot Sensor: {avg2:.2f} ± {stddev2:.2f} (min: {min2}, max: {max2})", end="\n\n")
+            print(f"    Top Sensor: {avg1:.2f} ± {stddev1:.2f} (min: {min1}, max: {max1})")
+            print(f"    Bot Sensor: {avg2:.2f} ± {stddev2:.2f} (min: {min2}, max: {max2})")
 
             # Clear the minute data lists
             minute_data1.clear()
@@ -102,8 +102,9 @@ try:
         # Check if it's time to write to the files
         if current_time - last_write_time >= WRITE_INTERVAL:
             # Write data to CSV files
-            print("Writing data to CSV files...")
+            print("Writing data to CSV files... ", end="")
             write_to_csv()
+            print("Saved.")
             
             # Update the last write time
             last_write_time = current_time
@@ -112,6 +113,6 @@ try:
         time.sleep(1)
 
 except KeyboardInterrupt:
-    print("Data logging stopped by user, saving data... ", end="")
+    print("\nData logging stopped by user, writing data to CSV files... ", end="")
     write_to_csv()  # Write any remaining data before exiting
     print("Saved.")
