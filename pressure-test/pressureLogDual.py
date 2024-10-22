@@ -34,8 +34,8 @@ def initialize_csv_file(file):
     if not os.path.exists(file):  # Check if the file already exists
         with open(file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['Timestamp', 'ADC_Value'])  # Write CSV header
-
+            writer.writerow(['Timestamp', 'Average', 'Standard Deviation', 'Minimum', 'Maximum'])
+            
 # Write data to CSV files and clear the data lists
 def write_to_csv():
     # Write data to CSV files
@@ -75,16 +75,23 @@ try:
         # Check if 60 seconds have passed
         current_time = time.time()
         if current_time - last_minute_time >= 60:
-            # Calculate average and standard deviation
+            # Calculate average, standard deviation, min and max for the minute data
             avg1 = statistics.mean(minute_data1)
             stddev1 = statistics.stdev(minute_data1)
+            min1 = min(minute_data1)
+            max1 = max(minute_data1)
             avg2 = statistics.mean(minute_data2)
             stddev2 = statistics.stdev(minute_data2)
-            
-            # Append statistics to the data streams
-            data_stream1.append([timestamp_str, avg1, stddev1])
-            data_stream2.append([timestamp_str, avg2, stddev2])
-            
+            min2 = min(minute_data2)
+            max2 = max(minute_data2)
+
+            # Append statistics to the data streams and print them
+            data_stream1.append([timestamp_str, avg1, stddev1, min1, max1])
+            data_stream2.append([timestamp_str, avg2, stddev2, min2, max2])
+            print(f"Timestamp: {timestamp_str}")
+            print(f"Top Sensor: {avg1:.2f} ± {stddev1:.2f} (min: {min1}, max: {max1})")
+            print(f"Bot Sensor: {avg2:.2f} ± {stddev2:.2f} (min: {min2}, max: {max2})", end="\n\n")
+
             # Clear the minute data lists
             minute_data1.clear()
             minute_data2.clear()
