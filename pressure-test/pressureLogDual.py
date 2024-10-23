@@ -28,6 +28,7 @@ last_write_time = time.time()
 last_minute_time = time.time()
 last_second_time = time.time()
 last_data_time = time.time()
+timestamp = 0
 
 # Directory for CSV files
 log_dir = 'pressure-test/pressure_logs'
@@ -81,20 +82,27 @@ minute_data1 = []
 minute_data2 = []
 
 # Initialize the dropped frame flag
-dropped_frame = True
+dropped_frame = False
+warning_printed = False
 
 try:
     while True:
         # Get the current timestamp
         timestamp = time.time()
 
+        # Check if a frame was dropped
         if timestamp - last_data_time >= DATA_INTERVAL / 1000:
-            # Print a warning if a frame or more was dropped
-            if dropped_frame:
+            if not warning_printed:
                 print("Dropped frame detected, delayed by", (timestamp - last_data_time) * 1000 - DATA_INTERVAL, "ms")
-                print("Please lower the data interval or optimize the code.")
+                print("    Please lower the data interval or optimize the code.")
+                warning_printed = True
             dropped_frame = True
-            
+        else:
+            dropped_frame = False
+            warning_printed = False
+
+        # Read data from the ADCs if [DATA_INTERVAL] ms has passed
+        if dropped_frame:
             # Update the last data time
             last_data_time = timestamp
 
@@ -149,9 +157,6 @@ try:
                     
                     # Update the last write time
                     last_write_time = timestamp
-
-        else:
-            dropped_frame = False
 
         # Small delay to prevent excessive CPU usage
         time.sleep((DATA_INTERVAL / 1000) / 10)
