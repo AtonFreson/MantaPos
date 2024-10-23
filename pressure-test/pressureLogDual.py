@@ -23,12 +23,14 @@ WRITE_INTERVAL = 600
 # Data interval in milliseconds (100 ms)
 DATA_INTERVAL = 100
 
+# Acceptable delay margin in milliseconds
+ACCEPTABLE_MARGIN = 5  # Adjust as needed
+
 # Initialize the last time intervals
 last_write_time = time.time()
 last_minute_time = time.time()
 last_second_time = time.time()
 last_data_time = time.time()
-timestamp = 0
 
 # Directory for CSV files
 log_dir = 'pressure-test/pressure_logs'
@@ -41,19 +43,15 @@ file_raw = os.path.join(log_dir, 'pressure_raw.csv')
 
 # Ensure that the CSV file has headers only if it doesn't exist
 def initialize_csv_file(file, type='raw'):
-    match type:
-        case 'raw':
-            if not os.path.exists(file):  # Check if the file already exists
-                with open(file, 'w', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(['Timestamp', 'Top Sensor', 'Bottom Sensor'])
-        case 'formatted':
-            if not os.path.exists(file):  # Check if the file already exists
-                with open(file, 'w', newline='') as f:
-                    writer = csv.writer(f)
-                    #writer.writerow(['Timestamp', 'Average', 'Standard Deviation', 'Minimum', 'Maximum'])
-                    writer.writerow(['Timestamp', 'Average', ' ', 'StdRange', 'Minimum', 'Maximum'])
-            
+    if not os.path.exists(file):  # Check if the file already exists
+        with open(file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            if type == 'raw':
+                writer.writerow(['Timestamp', 'Top Sensor', 'Bottom Sensor'])
+            elif type == 'formatted':
+                #writer.writerow(['Timestamp', 'Average', 'Standard Deviation', 'Minimum', 'Maximum'])
+                writer.writerow(['Timestamp', 'Average', ' ', 'StdRange', 'Minimum', 'Maximum'])
+
 # Write data to CSV files and clear the data lists
 def write_to_csv():
     # Write data to CSV files
@@ -81,55 +79,57 @@ initialize_csv_file(file_raw, 'raw')
 minute_data1 = []
 minute_data2 = []
 
-# Initialize the dropped frame flag
-dropped_frame = False
+# Initialize the warning flag
 warning_printed = False
 
 try:
     while True:
         # Get the current timestamp
-        timestamp = time.time()
+        current_time = time.time()
 
-        # Check if a frame was dropped
-        if timestamp - last_data_time >= DATA_INTERVAL / 1000:
-            if not warning_printed:
-                print("Dropped frame detected, delayed by", (timestamp - last_data_time) * 1000 - DATA_INTERVAL, "ms")
-                print("    Please lower the data interval or optimize the code.")
-                warning_printed = True
-            dropped_frame = True
-        else:
-            dropped_frame = False
-            warning_printed = False
+        # Calculate the time since the last data read
+        time_since_last_read = (current_time - last_data_time) * 1000  # in milliseconds
 
-        # Read data from the ADCs if [DATA_INTERVAL] ms has passed
-        if dropped_frame:
-            # Update the last data time
-            last_data_time = timestamp
-
+        # Check if it's time to read data
+        if time_since_last_read >= DATA_INTERVAL:
             # Read data from both ADCs
             value1 = adc1.read_adc(0)#, gain=GAIN)
             value2 = adc2.read_adc(0)#, gain=GAIN)
-            
-            timestamp_str = datetime.datetime.fromtimestamp(timestamp).isoformat()
+
+            timestamp_str = datetime.datetime.fromtimestamp(current_time).isoformat()
             data_stream_raw.append([timestamp_str, value1, value2])
 
-            if timestamp - last_second_time >= 1:
-                last_second_time = timestamp
+            # Update the last data time
+            last_data_time = current_time
+
+            # Check for significant delay
+            delay = time_since_last_read - DATA_INTERVAL
+            if delay > ACCEPTABLE_MARGIN:
+                if not warning_printed:
+                    print(f"Dropped frame detected, delayed by {delay:.2f} ms")
+                    print("Please lower the data interval or optimize the code.")
+                    warning_printed = True
+            else:
+                warning_printed = False
+
+            # Append data to the minute lists every second
+            if current_time - last_second_time >= 1:
+                last_second_time = current_time
 
                 # Append data to the minute lists
                 minute_data1.append(value1)
                 minute_data2.append(value2)
-                
-                if timestamp - last_minute_time >= 60:
-                    last_minute_time = timestamp
 
-                    # Calculate average, standard deviation, min and max for the minute data
+                if current_time - last_minute_time >= 60:
+                    last_minute_time = current_time
+
+                    # Calculate statistics for the minute data
                     avg1 = statistics.mean(minute_data1)
-                    stddev1 = statistics.stdev(minute_data1)
+                    stddev1 = statistics.stdev(minute_data1) if len(minute_data1) > 1 else 0
                     min1 = min(minute_data1)
                     max1 = max(minute_data1)
                     avg2 = statistics.mean(minute_data2)
-                    stddev2 = statistics.stdev(minute_data2)
+                    stddev2 = statistics.stdev(minute_data2) if len(minute_data2) > 1 else 0
                     min2 = min(minute_data2)
                     max2 = max(minute_data2)
 
@@ -138,7 +138,7 @@ try:
                     #data_stream1.append([timestamp_str, avg1, stddev1, min1, max1])
                     data_stream2.append([timestamp_str, avg2, avg2-stddev2, stddev2*2, min2, max2-min2])
                     #data_stream2.append([timestamp_str, avg2, stddev2, min2, max2])
-
+                    
                     # Print the statistics
                     print(f"Timestamp: {timestamp_str}")
                     print(f"    Top Sensor: {avg1:.2f} ± {stddev1:.2f} (min: {min1}, max: {max1})")
@@ -147,21 +147,22 @@ try:
                     # Clear the minute data lists
                     minute_data1.clear()
                     minute_data2.clear()
-                
-                # Check if it's time to write to the files
-                if timestamp - last_write_time >= WRITE_INTERVAL:
-                    # Write data to CSV files
-                    print("Writing data to CSV files... ", end="")
-                    write_to_csv()
-                    print("Saved.")
-                    
-                    # Update the last write time
-                    last_write_time = timestamp
+
+            # Check if it's time to write to the files
+            if current_time - last_write_time >= WRITE_INTERVAL:
+                # Write data to CSV files
+                print("Writing data to CSV files... ", end="")
+                write_to_csv()
+                print("Saved.")
+
+                # Update the last write time
+                last_write_time = current_time
 
         # Small delay to prevent excessive CPU usage
-        time.sleep((DATA_INTERVAL / 1000) / 10)
+        time.sleep(0.01)  # Sleep for 10ms
 
 except KeyboardInterrupt:
     print("\nData logging stopped by user, writing data to CSV files... ", end="")
     write_to_csv()  # Write any remaining data before exiting
     print("Saved.")
+    
