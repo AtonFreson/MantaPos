@@ -9,7 +9,7 @@ import statistics
 adc1 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x49)
 adc2 = Adafruit_ADS1x15.ADS1115(busnum=1, address=0x48)
 
-# Set the gain
+# Set the gain for the ADCs (1 for ±4.096V, 2 for ±2.048V, 4 for ±1.024V, 8 for ±0.512V, 16 for ±0.256V)
 #GAIN = 1
 
 # Data storage lists
@@ -37,8 +37,8 @@ file1 = os.path.join(log_dir, 'pressure_top.csv')
 file2 = os.path.join(log_dir, 'pressure_bottom.csv')
 file_raw = os.path.join(log_dir, 'pressure_raw.csv')
 
-# Ensure that the CSV file has headers only if it doesn't exist
-def initialize_csv_file(file, type='raw'):
+# Create a CSV file if one is not existent and ensure that it has headers
+def initialize_csv_file(file, type='formatted'):
     if not os.path.exists(file):  # Check if the file already exists
         with open(file, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -78,6 +78,7 @@ minute_data2 = []
 # Initialize the warning flag
 warning_printed = False
 
+# Main loop for data logging
 try:
     # Start time for synchronizing the loop
     next_loop_time = time.time()

@@ -451,7 +451,7 @@ def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera
     # Create a position text with fixed-width formatting to prevent text shifting
     position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={-position[1]: >+6.3f}m, Z={-position[2]: >+6.3f}m")
     rotation_text = (f"Rot: R={rotation[0]: >+6.3f}', P={rotation[1]: >+6.3f}', Y={rotation[2]: >+6.3f}'")
-    position_std_text = (f"-Err: X={position_std[0]: >6.6f}m, Y={position_std[1]: >6.6f}m, Z={position_std[2]: >6.6f}m")
+    position_std_text = (f"-Err:X={position_std[0]*1000: >6.3f}mm,Y={position_std[1]*1000: >6.3f}mm,Z={position_std[2]*1000: >6.3f}mm")
     rotation_std_text = (f"-Err: R={rotation_std[0]: >6.3f}', P={rotation_std[1]: >6.3f}', Y={rotation_std[2]: >6.3f}'")
 
     # Unpack rectangle bounds
