@@ -9,7 +9,7 @@ import genMarker
 
 # Initialize parameters
 # Set the selected camera: '4K', 'gopro' or 'axis'.
-CAMERA_TYPE = "4K"
+CAMERA_TYPE = "axis"
 CAMERA_INPUT = 2  # Camera index if the source is webcam-based
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
