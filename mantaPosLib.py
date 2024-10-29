@@ -1,5 +1,9 @@
 import cv2
+from contextlib import contextmanager
 import numpy as np
+from threading import Thread, Lock
+import time
+from datetime import datetime
 import os
 import re
 from scipy.spatial.transform import Rotation as R
@@ -451,7 +455,7 @@ def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera
     # Create a position text with fixed-width formatting to prevent text shifting
     position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={-position[1]: >+6.3f}m, Z={-position[2]: >+6.3f}m")
     rotation_text = (f"Rot: R={rotation[0]: >+6.3f}', P={rotation[1]: >+6.3f}', Y={rotation[2]: >+6.3f}'")
-    position_std_text = (f"-Err: X={position_std[0]: >6.6f}m, Y={position_std[1]: >6.6f}m, Z={position_std[2]: >6.6f}m")
+    position_std_text = (f"-Err:X={position_std[0]*1000: >6.3f}mm,Y={position_std[1]*1000: >6.3f}mm,Z={position_std[2]*1000: >6.3f}mm")
     rotation_std_text = (f"-Err: R={rotation_std[0]: >6.3f}', P={rotation_std[1]: >6.3f}', Y={rotation_std[2]: >6.3f}'")
 
     # Unpack rectangle bounds
@@ -471,3 +475,100 @@ def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera
 
     # Apply the overlay
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+# Class to read frames from an RTSP camera stream, with minimal buffering for real-time applications. Wrapper around OpenCV's VideoCapture class.
+class RealtimeCapture:
+    def __init__(self, rtsp_url):
+        """
+        Initialize and automatically start the RTSP camera.
+        """
+        self.rtsp_url = rtsp_url
+        self._cap = cv2.VideoCapture(rtsp_url)
+        if not self._cap.isOpened():
+            raise Exception(f"Failed to open RTSP stream: {self.rtsp_url}")
+            
+        # Single frame buffer with timestamp
+        self._current_frame = None
+        self._current_timestamp = None
+        self._frame_lock = Lock()
+        self._running = False
+        self._capture_thread = None
+        
+        # Configure camera buffer size
+        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # Start automatically
+        self.start()
+        
+    def get(self, prop_id):
+        """Get a camera property"""
+        return self._cap.get(prop_id)
+        
+    def set(self, prop_id, value):
+        """Set a camera property"""
+        return self._cap.set(prop_id, value)
+        
+    def isOpened(self):
+        """Check if camera is opened"""
+        return self._cap.isOpened()
+        
+    def release(self):
+        """Release the camera"""
+        self.stop()
+        
+    def start(self):
+        """Start the camera capture"""
+        if not self._running:
+            self._running = True
+            self._capture_thread = Thread(target=self._capture_frames, daemon=True)
+            self._capture_thread.start()
+            time.sleep(0.1)  # Short wait for first frame
+        
+    def stop(self):
+        """Stop the camera capture"""
+        self._running = False
+        if self._capture_thread:
+            self._capture_thread.join()
+        if self._cap:
+            self._cap.release()
+            
+    def _capture_frames(self):
+        """Background thread to continuously capture frames."""
+        while self._running:
+            ret, frame = self._cap.read()
+            
+            if ret:
+                timestamp = datetime.now().isoformat(timespec='microseconds')
+                
+                with self._frame_lock:
+                    self._current_frame = frame
+                    self._current_timestamp = timestamp
+            
+            time.sleep(0.001)
+                    
+    def read(self, timestamp=False):
+        """
+        Read the most recent frame. Supports both standard and timestamped reads.
+        
+        Args:
+            timestamp (bool): If True, returns timestamp with the frame
+            
+        Returns:
+            If timestamp=False:
+                tuple: (success (bool), frame (numpy.ndarray))
+            If timestamp=True:
+                tuple: (success (bool), frame (numpy.ndarray), timestamp (str))
+        """
+        with self._frame_lock:
+            if self._current_frame is None:
+                return (False, None) if not timestamp else (False, None, None)
+            
+            return (True, self._current_frame.copy()) if not timestamp else (True, self._current_frame.copy(), self._current_timestamp)
+            
+    def __enter__(self):
+        """Support for with statement"""
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Support for with statement"""
+        self.stop()

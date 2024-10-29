@@ -6,9 +6,10 @@ import mantaPosLib as manta
 import shutil
 import genMarker
 
-# Set the selected camera: gopro or axis.
-CAMERA_TYPE = "axis"
-CAMERA_INPUT = 2 # OBS Virtual Camera
+# Set the selected camera: 4K, gopro or axis.
+CAMERA_TYPE = "4K"
+CAMERA_INPUT = 2 # Select OBS Virtual Camera
+CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 delay_time = 0.5 # 500ms delay between capture
 
@@ -17,7 +18,7 @@ squares_horizontally = 7
 square_pixels = 200 # Pixel size of the chessboard squares
 grid_edge = 30 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
-square_length = 5 # Real world length of square in meters
+square_length = 0.2975/6 # Real world length of square in meters
 
 # Define the aruco dictionary, charuco board and detector
 marker_length = square_length*marker_ratio
@@ -27,7 +28,10 @@ params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
-cap = cv2.VideoCapture(CAMERA_INPUT)
+if CAMERA_TYPE == "4K":
+    cap = cv2.VideoCapture(CAMERA_RTSP_ADDR)
+else:
+    cap = cv2.VideoCapture(CAMERA_INPUT)
 cv2.namedWindow("Camera Preview", cv2.WINDOW_NORMAL) 
 
 match CAMERA_TYPE:
@@ -37,8 +41,12 @@ match CAMERA_TYPE:
     case "gopro":
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    case "4K":
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
+        
 if not cap.isOpened():
-    print("Error: Could not open camera",CAMERA_INPUT)
+    print("Error: Could not open camera", "over RTSP" if CAMERA_TYPE == "4K" else CAMERA_INPUT)
     exit()
 
 # Prepare to save captured snapshots, clear previous directory
@@ -91,7 +99,7 @@ while True:
             # Save detected marker corners (for calibration)
             ret, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, gray_frame, board)
 
-            if charucoIds is not None and len(charucoCorners) > 3 and time.time() >= next_snapshot_time:
+            if charucoIds is not None and len(charucoCorners) >= 6 and time.time() >= next_snapshot_time:
                 # Save the frame to the snapshots folder
                 snapshot_filename = os.path.join(snapshot_dir, f'snapshot_{snapshot_counter:04d}.png')
                 cv2.imwrite(snapshot_filename, gray_frame)
@@ -129,6 +137,8 @@ if all_charuco_corners and all_charuco_ids:
             np.savez(os.path.join(calibration_dir,'camera_calibration_axis.npz'), camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
         case "gopro":
             np.savez(os.path.join(calibration_dir,'camera_calibration_gopro.npz'), camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
+        case "4K":
+            np.savez(os.path.join(calibration_dir,'camera_calibration_4K.npz'), camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
 
     print("Calibration complete.\n")
     print("Camera matrix:\n", camera_matrix)
