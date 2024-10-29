@@ -16,7 +16,7 @@
 volatile long encoderCount = 0;
 long lastEncoderCount = 0;
 unsigned long lastPrintTime = 0;
-const unsigned long printInterval = 100; // 100ms update rate
+const unsigned long printInterval = 10; // 100ms update rate
 
 // Differential signal processing
 inline int readDifferential(int pinPos, int pinNeg) {
@@ -56,7 +56,7 @@ void IRAM_ATTR indexISR() {
 }
 
 void setup() {
-    Serial.begin(9600);
+    Serial.begin(115200);
     
     // Configure all pins as inputs
     pinMode(ENCODER_PIN_A_POS, INPUT);

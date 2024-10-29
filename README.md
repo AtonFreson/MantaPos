@@ -7,4 +7,3 @@ Make sure to install the required package:
 ```sh
 pip install opencv-contrib-python
 ```
-

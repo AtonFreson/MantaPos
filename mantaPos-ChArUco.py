@@ -9,17 +9,17 @@ import genMarker
 
 # Initialize parameters
 # Set the selected camera: '4K', 'gopro' or 'axis'.
-CAMERA_TYPE = "axis"
+CAMERA_TYPE = "4K"
 CAMERA_INPUT = 2  # Camera index if the source is webcam-based
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 # ChArUco board settings
 squares_vertically = 5
 squares_horizontally = 7
-square_pixels = 200 # Pixel size of the chessboard squares
-grid_edge = 30 # Pixel margin outside the ChArUco grid
+square_pixels = 50 # Pixel size of the chessboard squares
+grid_edge = 8 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
-square_length = 0.2975/6 # Real world length of square in meters
+square_length = 1.181/7#0.2975/6 # Real world length of square in meters
 
 # Define the aruco dictionary, charuco board and detector
 marker_length = square_length*marker_ratio
@@ -30,7 +30,8 @@ detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
 if CAMERA_TYPE == "4K":
-    cap = cv2.VideoCapture(CAMERA_RTSP_ADDR)
+    #cap = cv2.VideoCapture(CAMERA_RTSP_ADDR)
+    cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
 else:
     cap = cv2.VideoCapture(CAMERA_INPUT)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
@@ -145,7 +146,7 @@ while True:
                 # Display position and rotation
                 match CAMERA_TYPE:
                     case "axis":
-                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.3, thickness=2, rect_padding=(10,10,950,200))
+                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.3, thickness=2, rect_padding=(10,10,1000,200))
                     case "axis_low":
                         manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all)
                     case "gopro":
