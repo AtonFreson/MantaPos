@@ -19,7 +19,7 @@ squares_horizontally = 7
 square_pixels = 50 # Pixel size of the chessboard squares
 grid_edge = 8 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
-square_length = 1.181/7#0.2975/6 # Real world length of square in meters
+square_length = 0.2975/6 # Real world length of square in meters. Meeting room: 1.181/7
 
 # Define the aruco dictionary, charuco board and detector
 marker_length = square_length*marker_ratio
