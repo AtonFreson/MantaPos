@@ -482,6 +482,7 @@ class RealtimeCapture:
         """
         Initialize and automatically start the RTSP camera.
         """
+        #rtsp_url += '?fflags=nobuffer&flags=low_delay'
         self.rtsp_url = rtsp_url
         self._cap = cv2.VideoCapture(rtsp_url)
         if not self._cap.isOpened():
@@ -527,10 +528,10 @@ class RealtimeCapture:
     def stop(self):
         """Stop the camera capture"""
         self._running = False
-        if self._capture_thread:
-            self._capture_thread.join()
         if self._cap:
             self._cap.release()
+        if self._capture_thread:
+            self._capture_thread.join()
             
     def _capture_frames(self):
         """Background thread to continuously capture frames."""
