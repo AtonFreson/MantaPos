@@ -20,9 +20,6 @@ CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/"
 # Initialize time reference
 start_time = time.time()
 
-# Configure pytesseract path if necessary
-# pytesseract.pytesseract.tesseract_cmd = r'/path/to/tesseract'  # Update this path if necessary
-
 # Create a named window for displaying the timestamp
 window_name = 'Timestamp Display'
 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -31,7 +28,7 @@ cv2.resizeWindow(window_name, 800, 600)
 # Initialize video capture (camera pointed at the screen)
 cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
 
-# Check if the webcam is opened correctly
+# Check if the camera is opened correctly
 if not cap.isOpened():
     print("Error: Could not open video device.")
     exit()
@@ -76,21 +73,21 @@ while True:
         print("Failed to capture frame from camera.")
         break
 
-    # Optional: Resize the captured frame for faster processing
-    # captured_frame = cv2.resize(captured_frame, (640, 480))
+    # Record capture time immediately after capturing the frame
+    capture_time_ms = int((time.time() - start_time) * 1000)
 
     # Convert the captured frame to grayscale
     gray_frame = cv2.cvtColor(captured_frame, cv2.COLOR_BGR2GRAY)
 
     # Crop the center region where the timestamp is expected
-    crop_width = 400*4  # Adjust based on the size of the timestamp on the captured frame
-    crop_height = 200*4
+    crop_width = 1600  # Adjust based on the size of the timestamp on the captured frame
+    crop_height = 800
     center_x = captured_frame.shape[1] // 2
     center_y = captured_frame.shape[0] // 2
-    crop_x1 = center_x - crop_width // 2
-    crop_y1 = center_y - crop_height // 2
-    crop_x2 = center_x + crop_width // 2
-    crop_y2 = center_y + crop_height // 2
+    crop_x1 = max(center_x - crop_width // 2, 0)
+    crop_y1 = max(center_y - crop_height // 2, 0)
+    crop_x2 = min(center_x + crop_width // 2, captured_frame.shape[1])
+    crop_y2 = min(center_y + crop_height // 2, captured_frame.shape[0])
     cropped = gray_frame[crop_y1:crop_y2, crop_x1:crop_x2]
 
     # Preprocess the cropped image for OCR
@@ -103,8 +100,8 @@ while True:
 
     try:
         detected_time_ms = int(extracted_text)
-        # Calculate the delay
-        delay_ms = current_time_ms - detected_time_ms
+        # Calculate the delay using capture time
+        delay_ms = capture_time_ms - detected_time_ms
         if delay_ms >= 0:
             print(f"Detected Delay: {delay_ms} ms")
         else:
@@ -112,9 +109,9 @@ while True:
     except ValueError:
         print("OCR failed to detect the timestamp.")
 
-    # Display the captured frame (optional)
-    cropped = cv2.resize(cropped, (400, 200))
-    cv2.imshow('Cropped Frame', cropped)
+    # Display the cropped frame (optional)
+    resized_cropped = cv2.resize(cropped, (400, 200))
+    cv2.imshow('Cropped Frame', resized_cropped)
 
     # Break the loop on 'q' key press
     if cv2.waitKey(1) & 0xFF == ord('q'):
