@@ -1,3 +1,7 @@
+#include <ETH.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+
 // Pin definitions for SCA50 differential signals
 #define ENCODER_PIN_A_POS 13  // A
 #define ENCODER_PIN_A_NEG 14  // A-
@@ -16,7 +20,77 @@
 volatile long encoderCount = 0;
 long lastEncoderCount = 0;
 unsigned long lastPrintTime = 0;
-const unsigned long printInterval = 10; // 100ms update rate
+unsigned long lastMeasurementTime = 0;
+const unsigned long printInterval = 10; // 10ms update rate
+volatile bool resetCommandReceived = false;
+volatile bool resetOccurred = false;
+const bool debugLock = false; // Set to true to ensure serial connection;
+// Otherwise just send anything to device when connected and serial output will enable itself.
+
+// Network configuration
+IPAddress local_ip(169, 254, 178, 100);    // ESP32 static IP (adjusted to match PC's subnet)
+IPAddress gateway(0, 0, 0, 0);             // No gateway needed for direct connection
+IPAddress subnet(255, 255, 0, 0);          // Subnet mask matching PC's subnet mask
+IPAddress dns(0, 0, 0, 0);                 // No DNS server needed
+
+// UDP configuration
+const char* udpAddress = "169.254.255.255"; // Broadcast address or specific IP
+const int udpPort = 13233;                // Source & Destination port
+
+WiFiUDP udp;
+
+// Wrapper class for Serial to handle connection status
+class SerialWrapper {
+public:
+    void begin(unsigned long baudrate) {
+        Serial.begin(baudrate);
+        this->serialConnected = true;
+        
+        // Define timeout period (e.g., 2000 milliseconds)
+        unsigned long timeout = 2000;
+        unsigned long startTime = millis();
+        
+        // Wait for serial connection
+        while (!Serial && (millis() - startTime) < timeout) {
+            // Do nothing, just wait
+        }
+    }
+    
+    template<typename T>
+    void println(T message) {
+        if (this->serialConnected) {
+            Serial.println(message);
+        }
+    }
+
+    template<typename T>
+    void print(T message) {
+        if (this->serialConnected) {
+            Serial.print(message);
+        }
+    }
+    
+    int available() {
+        return Serial.available();
+    }
+    
+    String readString() {
+        return Serial.readString();
+    }
+    
+    bool isConnected() {
+        return this->serialConnected;
+    }
+    
+    void setSerialConnected(bool status) {
+        this->serialConnected = status;
+    }
+
+private:
+    bool serialConnected = false;
+};
+
+SerialWrapper SerialW;
 
 // Differential signal processing
 inline int readDifferential(int pinPos, int pinNeg) {
@@ -50,14 +124,45 @@ void IRAM_ATTR encoderISR() {
 
 void IRAM_ATTR indexISR() {
     if (readDifferential(INDEX_PIN_Z_POS, INDEX_PIN_Z_NEG) > 0) {
-        // Optional: Implement index pulse handling
-        // For example, you could use this to verify position or reset count
+        if (resetCommandReceived) {
+            lastEncoderCount = lastEncoderCount - encoderCount; // Adjust the last count relative to zero
+            encoderCount = 0; // Reset the encoder count
+            resetCommandReceived = false; // Clear the reset command flag
+            resetOccurred = true; // Set the reset occurred flag
+        }
     }
 }
 
+void WiFiEvent(arduino_event_t *event) {
+    switch (event->event_id) {
+        case ARDUINO_EVENT_ETH_START:
+            SerialW.println("Ethernet Started");
+            // Set the hostname for the ESP32
+            ETH.setHostname("esp32-ethernet");
+            break;
+        case ARDUINO_EVENT_ETH_CONNECTED:
+            SerialW.println("Ethernet Connected");
+            break;
+        case ARDUINO_EVENT_ETH_GOT_IP:
+            SerialW.println("Ethernet Got IP");
+            SerialW.print("IP Address: ");
+            SerialW.println(ETH.localIP());
+            break;
+        case ARDUINO_EVENT_ETH_DISCONNECTED:
+            SerialW.println("Ethernet Disconnected");
+            break;
+        case ARDUINO_EVENT_ETH_STOP:
+            SerialW.println("Ethernet Stopped");
+            break;
+        default:
+            break;
+    }
+}
+
+
 void setup() {
-    Serial.begin(115200);
-    
+    SerialW.begin(115200);
+
     // Configure all pins as inputs
     pinMode(ENCODER_PIN_A_POS, INPUT);
     pinMode(ENCODER_PIN_A_NEG, INPUT);
@@ -71,48 +176,95 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B_POS), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(INDEX_PIN_Z_POS), indexISR, RISING);
     
-    Serial.println("\nSCA50-400 Encoder Test");
-    Serial.println("PPR: 400");
-    Serial.println("Resolution: ±0.10mm\n");
+    delay(1000); // Wait a bit for serial connection to be established
+    SerialW.println("\nSCA50-400 Encoder Test");
+    SerialW.println("PPR: 400");
+    SerialW.println("Resolution: ±0.10mm\n");
+
+    // Initialize Ethernet and register event handler
+    WiFi.onEvent(WiFiEvent);
+    ETH.begin();
+
+    // Optional: Set static IP configuration
+    ETH.config(local_ip, gateway, subnet, dns);
+
+    // Wait for Ethernet connection
+    while (!ETH.linkUp()) {
+        SerialW.println("Waiting for Ethernet connection...");
+        delay(1000);
+    }
+
+    udp.begin(udpPort);  // Set the source port to 13233
+
+    // Disable debug serial output if not in debug mode
+    if (!debugLock) {
+        SerialW.println("Turning off debug serial output, send 'debug on' to enable");
+        SerialW.setSerialConnected(false);
+    }
 }
 
 void loop() {
+    // Check if a reset occurred and print the message
+    if (resetOccurred) {
+        SerialW.println("Encoder count reset.");
+        resetOccurred = false; // Clear the reset occurred flag
+    }
+
     unsigned long currentTime = millis();
     
-    // Check for serial input
-    if (Serial.available() > 0) {
-        String input = Serial.readString();
+    // Check for SerialW input
+    if (SerialW.available() > 0) {
+        String input = SerialW.readString();
         input.trim(); // Remove any leading/trailing whitespace
-        Serial.println("Received input: " + input);
+        SerialW.println("Received input: " + input);
+
+        if (input.equals("debug on")) {
+            SerialW.setSerialConnected(true);
+            SerialW.println("Received input: " + input);
+            SerialW.println("Turning on debug serial output");
+        }
+
+
         if (input.equals("reset")) {
+            SerialW.println("Reset upon next index pulse");
             noInterrupts();
-            encoderCount = 0;
+            resetCommandReceived = true;
             interrupts();
-            Serial.println("Encoder count reset.");
+        } else if (input.equals("debug off")) {
+            SerialW.println("Turning off debug serial output");
+            SerialW.setSerialConnected(false);
         }
     }
 
     if (currentTime - lastPrintTime >= printInterval) {
-        // Calculate speed and position only if count changed
-        if (encoderCount != lastEncoderCount) {
-            noInterrupts();  // Disable interrupts while reading volatile
-            long currentCount = encoderCount;
-            interrupts();
-            
+        noInterrupts();  // Disable interrupts while reading volatile
+        long currentCount = encoderCount;
+        interrupts();
+
+        unsigned long timeDelta = currentTime - lastMeasurementTime;
+
+        if (currentCount != lastEncoderCount && timeDelta > 0) {
             float revolutions = (float)currentCount / COUNTS_PER_REV;
             float distance = currentCount * DISTANCE_PER_COUNT;
-            
+
             // Calculate speed
-            float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / printInterval);
+            float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
             float rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
             float speed_m_per_s = countsPerSec * DISTANCE_PER_COUNT;
-            char buffer[100];
+
+            char buffer[150];
             snprintf(buffer, sizeof(buffer), 
-                    "Rev: %8.3f      RPM: %8.3f      Speed (m/s): %8.3f      Dist (m): %9.4f", 
+                    "Rev: %8.3f  RPM: %8.3f  Speed (m/s): %8.3f  Dist (m): %9.4f", 
                     revolutions, rpm, speed_m_per_s, distance);
-            Serial.println(buffer);
-            
+            SerialW.println(buffer);
+
+            // Prepare UDP packet
+            udp.beginPacket(udpAddress, udpPort);
+            udp.print(buffer);
+            udp.endPacket();
+
             lastEncoderCount = currentCount;
+            lastMeasurementTime = currentTime;
         }
         lastPrintTime = currentTime;
     }
