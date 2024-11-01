@@ -16,15 +16,16 @@ CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT
 # ChArUco board settings
 squares_vertically = 5
 squares_horizontally = 7
-square_pixels = 50 # Pixel size of the chessboard squares
-grid_edge = 8 # Pixel margin outside the ChArUco grid
-marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
+square_pixels = 200 # Pixel size of the chessboard squares
+grid_edge = 20 # Pixel margin outside the ChArUco grid
+marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
 square_length = 0.2975/6 # Real world length of square in meters. Meeting room: 1.181/7
 
-# Define the aruco dictionary, charuco board and detector
-marker_length = square_length*marker_ratio
-dictionary = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
-board = cv2.aruco.CharucoBoard((squares_horizontally, squares_vertically), square_length, marker_length, dictionary)
+# Generate and display the marker grid
+board, dictionary = genMarker.create_and_save_ChArUco_board(square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
+manta.display_marker_grid(board_type="ChArUco")
+
+# Define the detector and parameters
 params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
@@ -75,8 +76,6 @@ board_center_offset = [
 ]
 board_pos = board_center_offset#[0,0,0]  # Position of the marker in meters
 board_rot = [0,0,0]  # Euler rotation of the marker in degrees, origin is normal around z
-
-manta.display_marker_grid(board_type="ChArUco")
 
 while True:
     # Capture camera frame
