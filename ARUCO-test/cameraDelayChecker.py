@@ -11,6 +11,7 @@ sys.path.insert(0, parent_dir)
 import cv2
 import numpy as np
 import pytesseract
+from collections import deque
 pytesseract.pytesseract.tesseract_cmd = r'C:\Users\A242937\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
 import time
 import mantaPosLib as manta
@@ -19,11 +20,6 @@ CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/"
 
 # Initialize time reference
 start_time = time.time()
-
-# Create a named window for displaying the timestamp
-window_name = 'Timestamp Display'
-cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-cv2.resizeWindow(window_name, 800, 600)
 
 # Initialize video capture (camera pointed at the screen)
 cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
@@ -40,13 +36,16 @@ font_thickness = 10
 text_color = (255, 255, 255)  # White color
 bg_color = (0, 0, 0)  # Black background
 
+# Initialize a deque to store the last 10 delay values
+rolling_delays = deque(maxlen=10)
+
 while True:
     # Calculate current timestamp in milliseconds since the script started
     current_time_ms = int((time.time() - start_time) * 1000)
     timestamp_text = f"{current_time_ms}"
 
     # Create a black image to display the timestamp
-    display_frame = np.zeros((600, 800, 3), dtype=np.uint8)
+    display_frame = np.zeros((800, 1200, 3), dtype=np.uint8)
 
     # Get text size
     (text_width, text_height), _ = cv2.getTextSize(timestamp_text, font, font_scale, font_thickness)
@@ -55,17 +54,11 @@ while True:
     text_x = (display_frame.shape[1] - text_width) // 2
     text_y = (display_frame.shape[0] + text_height) // 2
 
-    # Draw background rectangle for better visibility
-    cv2.rectangle(display_frame,
-                  (text_x - 20, text_y - text_height - 20),
-                  (text_x + text_width + 20, text_y + 20),
-                  bg_color, -1)
-
     # Put the timestamp text on the display frame
     cv2.putText(display_frame, timestamp_text, (text_x, text_y), font, font_scale, text_color, font_thickness)
 
     # Display the timestamp window
-    cv2.imshow(window_name, display_frame)
+    cv2.imshow('Timestamp Display', display_frame)
 
     # Capture frame from the camera (pointed at the screen)
     ret, captured_frame = cap.read()
@@ -103,11 +96,15 @@ while True:
         # Calculate the delay using capture time
         delay_ms = capture_time_ms - detected_time_ms
         if delay_ms >= 0:
-            print(f"Detected Delay: {delay_ms} ms")
+            # Add the delay to the rolling list
+            rolling_delays.append(delay_ms)
+            # Calculate the rolling average
+            rolling_avg = sum(rolling_delays) / len(rolling_delays)
+            print(f"\nDetected Delay: {delay_ms} ms ({len(rolling_delays)}pt average: {int(rolling_avg)} ms)", end='')
         else:
-            print("Detected future timestamp, possible OCR error.")
+            print("\nDetected future timestamp, possible OCR error.", end='')
     except ValueError:
-        print("OCR failed to detect the timestamp.")
+        print(".", end='', flush=True)
 
     # Display the cropped frame (optional)
     resized_cropped = cv2.resize(cropped, (400, 200))

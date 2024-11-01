@@ -224,7 +224,6 @@ void loop() {
             SerialW.println("Turning on debug serial output");
         }
 
-
         if (input.equals("reset")) {
             SerialW.println("Reset upon next index pulse");
             noInterrupts();
