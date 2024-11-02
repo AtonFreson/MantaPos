@@ -161,6 +161,7 @@ void WiFiEvent(arduino_event_t *event) {
 
 
 void setup() {
+    delay(250);
     SerialW.begin(115200);
 
     // Configure all pins as inputs
