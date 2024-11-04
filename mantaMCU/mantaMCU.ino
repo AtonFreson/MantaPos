@@ -1,16 +1,27 @@
 #include <ETH.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <I2Cdev.h>
+#include <MPU6050.h>
+#include <Wire.h>
+#include <DS3231.h>
+#include <Adafruit_ADS1X15.h>
 
 // Pin definitions for SCA50 differential signals
-#define ENCODER_PIN_A_POS 13  // A
-#define ENCODER_PIN_A_NEG 14  // A-
+#define ENCODER_PIN_A_POS 14  // A
+#define ENCODER_PIN_A_NEG 15  // A-
 #define ENCODER_PIN_B_POS 32  // B
 #define ENCODER_PIN_B_NEG 33  // B-
-#define INDEX_PIN_Z_POS 5     // Z
-#define INDEX_PIN_Z_NEG 4     // Z-
+#define INDEX_PIN_Z_POS 35    // Z
+#define INDEX_PIN_Z_NEG 36    // Z-
+
+// ESP32-PoE-ISO I2C pins
+#define I2C_SDA 13
+#define I2C_SCL 16
+#define I2C_1_SDA 5
+#define I2C_1_SCL 4
  
-// Configuration
+// Encoder configuration
 #define PPR 400  // Pulses Per Revolution
 #define COUNTS_PER_REV (PPR * 4)  // In quadrature mode
 #define WHEEL_DIAMETER_MM 82.53
@@ -21,7 +32,7 @@ volatile long encoderCount = 0;
 long lastEncoderCount = 0;
 unsigned long lastPrintTime = 0;
 unsigned long lastMeasurementTime = 0;
-const unsigned long printInterval = 10; // 10ms update rate
+const unsigned long printInterval = 100; // 10ms update rate
 volatile bool resetCommandReceived = false;
 volatile bool resetOccurred = false;
 const bool debugLock = false; // Set to true to ensure serial connection;
@@ -38,6 +49,20 @@ const char* udpAddress = "169.254.255.255"; // Broadcast address or specific IP
 const int udpPort = 13233;                // Source & Destination port
 
 WiFiUDP udp;
+
+// IMU configuration
+MPU6050 accelgyro(0x69); // <-- AD0 high
+
+int16_t ax, ay, az;
+int16_t gx, gy, gz;
+
+float g = 9.80665; // m/s²
+
+// Temperature sensor configuration
+DS3231 temp_sensor;
+
+// ADC configuration for pressure sensor
+Adafruit_ADS1115 ads;  /* 16-bit version */
 
 // Wrapper class for Serial to handle connection status
 class SerialWrapper {
@@ -172,7 +197,7 @@ void setup() {
     pinMode(INDEX_PIN_Z_POS, INPUT);
     pinMode(INDEX_PIN_Z_NEG, INPUT);
     
-    // Attach interrupts - using CHANGE for both edges of the signals
+    // Attach interrupts - using CHANGE for both edges of the signals, and RISING for index
     attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A_POS), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B_POS), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(INDEX_PIN_Z_POS), indexISR, RISING);
@@ -196,6 +221,34 @@ void setup() {
     }
 
     udp.begin(udpPort);  // Set the source port to 13233
+
+    // Initialize IMU (accelerometer and gyroscope)
+    Wire.begin(I2C_SDA, I2C_SCL);
+    SerialW.println("Initializing IMU devices...");
+    accelgyro.initialize();
+
+    // verify connection
+    SerialW.println("Testing IMU connections...");
+    if (accelgyro.testConnection()) {
+      	SerialW.println("MPU6050 connection successful.");
+    } else {
+      	SerialW.println("MPU6050 connection failed, halting program.");
+      	while (1); // halt the program
+    }
+
+    // Initialize DS3231
+    Serial.println("Initialize DS3231 - temperature sensor");
+    temp_sensor.begin();
+    
+    // Initialize ADC
+    Wire1.begin(I2C_1_SDA, I2C_1_SCL);
+    SerialW.println("Initializing pressure sensor ADC...");
+    bool result = ads.begin(ADS1X15_ADDRESS, &Wire1);
+    if (!result) {
+        SerialW.println("Failed to initialize pressure sensor ADC, halting program.");
+        while (1);
+    }
+
 
     // Disable debug serial output if not in debug mode
     if (!debugLock) {
@@ -252,20 +305,82 @@ void loop() {
             float rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
             float speed_m_per_s = countsPerSec * DISTANCE_PER_COUNT;
 
-            char buffer[150];
-            snprintf(buffer, sizeof(buffer), 
+            char buffer1[150];
+            snprintf(buffer1, sizeof(buffer), 
                     "Rev: %8.3f  RPM: %8.3f  Speed (m/s): %8.3f  Dist (m): %9.4f", 
                     revolutions, rpm, speed_m_per_s, distance);
-            SerialW.println(buffer);
+            SerialW.println(buffer1);
 
             // Prepare UDP packet
             udp.beginPacket(udpAddress, udpPort);
-            udp.print(buffer);
+            udp.print(buffer1);
             udp.endPacket();
 
             lastEncoderCount = currentCount;
             lastMeasurementTime = currentTime;
         }
+
+
+        // read raw accel/gyro measurements from device
+        accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+        // Convert raw acceleration data to m/s², and raw gyroscope data to radians per second
+		float ax_mss = (float)ax / 16384.0 * g;
+		float ay_mss = (float)ay / 16384.0 * g;
+		float az_mss = (float)az / 16384.0 * g;
+		float gx_rads = (float)gx / 131.0 * (3.14159265358979323846 / 180.0);
+		float gy_rads = (float)gy / 131.0 * (3.14159265358979323846 / 180.0);
+		float gz_rads = (float)gz / 131.0 * (3.14159265358979323846 / 180.0);
+
+		// Print the acceleration in m/s²
+		SerialW.print("Acceleration (m/s²): "); SerialW.print("\t");
+		SerialW.print("X=");
+		SerialW.print(ax_mss,5); SerialW.print("\t");
+		SerialW.print("Y=");
+		SerialW.print(ay_mss,5); SerialW.print("\t");
+		SerialW.print("Z=");
+		SerialW.print(az_mss,5); SerialW.print("\t"); SerialW.print("\t");
+
+		// Print the gyroscope data in radians per second
+		SerialW.print("Gyroscope (rad/s): "); SerialW.print("\t");
+		SerialW.print("X=");
+		SerialW.print(gx_rads,5); SerialW.print("\t");
+		SerialW.print("Y=");
+		SerialW.print(gy_rads,5); SerialW.print("\t");
+		SerialW.print("Z=");
+		SerialW.println(gz_rads,5);
+        
+        // Prepare UDP packet
+        udp.beginPacket(udpAddress, udpPort);
+        udp.print(buffer2);
+        udp.endPacket();
+
+
+        // read temperature from DS3231
+        temp_sensor.forceConversion();
+        float temp = temp_sensor.readTemperature();
+        SerialW.print("Temperature: "); SerialW.println(temp);
+
+        // Prepare UDP packet
+        udp.beginPacket(udpAddress, udpPort);
+        udp.print(buffer3);
+        udp.endPacket();
+
+
+        // read pressure from ADS1115
+        int16_t adc_value = ads.readADC_SingleEnded(0);
+        SerialW.print("Pressure: "); SerialW.println(adc_value);
+
+        // Prepare UDP packet
+        udp.beginPacket(udpAddress, udpPort);
+        udp.print(buffer4);
+        udp.endPacket();
+
+
         lastPrintTime = currentTime;
     }
 }
+
+
+
+//format the packets to be readable in a python dictionary, the recieving side will run a python script. the serial debug format should still be easily readable. use system time to timestamp each data capture. 
