@@ -19,7 +19,7 @@ From IDE Library Manager:
 - Adafruit ADS1X15
 
 From GitHub:
-> Place the folder containing the main <library name>.h file in <br /> 
+> Place the folder containing the main "library_name.h" file in <br /> 
 > `C:\Users\<USER>\Documents\Arduino\libraries`<br /> 
 > and restart the Arduino IDE.
 - [ESP32-PoE](https://github.com/OLIMEX/ESP32-POE/tree/master/SOFTWARE/ARDUINO)
