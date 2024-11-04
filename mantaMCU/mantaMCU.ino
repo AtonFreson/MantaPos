@@ -32,6 +32,7 @@ volatile long encoderCount = 0;
 long lastEncoderCount = 0;
 unsigned long lastPrintTime = 0;
 unsigned long lastMeasurementTime = 0;
+unsigned long encoderTimestamp = millis();
 const unsigned long printInterval = 100; // 10ms update rate
 volatile bool resetCommandReceived = false;
 volatile bool resetOccurred = false;
@@ -51,11 +52,18 @@ const int udpPort = 13233;                // Source & Destination port
 WiFiUDP udp;
 
 // IMU configuration
-MPU6050 accelgyro(0x69); // <-- AD0 high
+MPU6050 accelgyro(0x69); // Make sure AD0 is high by shorting R3 to VCC
 
+// Variables to hold data
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
-
+volatile long currentCount;
+float revolutions = 0, rpm = 0, speed = 0, distance = 0;
+unsigned long imuTimestamp, tempTimestamp, pressureTimestamp;
+float ax_mss, ay_mss, az_mss;
+float gx_rads, gy_rads, gz_rads;
+float temperature;
+int16_t adc_value;
 float g = 9.80665; // m/s²
 
 // Temperature sensor configuration
@@ -103,7 +111,7 @@ public:
         return Serial.readString();
     }
     
-    bool isConnected() {
+    bool getSerialConnected() {
         return this->serialConnected;
     }
     
@@ -126,6 +134,8 @@ void IRAM_ATTR encoderISR() {
     static int8_t lookup_table[] = {0,-1,1,0,1,0,0,-1,-1,0,0,1,0,1,-1,0};
     static uint8_t lastState = 0;
     
+    encoderTimestamp = millis();
+
     // Read current state of both channels using differential signals
     int8_t stateA = readDifferential(ENCODER_PIN_A_POS, ENCODER_PIN_A_NEG);
     int8_t stateB = readDifferential(ENCODER_PIN_B_POS, ENCODER_PIN_B_NEG);
@@ -185,6 +195,96 @@ void WiFiEvent(arduino_event_t *event) {
 }
 
 
+void dataPrint() {
+    // Encoder data capture
+    noInterrupts();  // Disable interrupts while reading volatile
+    currentCount = encoderCount;
+    interrupts();
+
+    // Calculate time delta since last measurement
+    unsigned long timeDelta = encoderTimestamp - lastMeasurementTime;
+    if (timeDelta > 0) {
+        revolutions = (float)currentCount / COUNTS_PER_REV;
+        distance = currentCount * DISTANCE_PER_COUNT;
+
+        // Calculate speed
+        float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
+        rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
+        speed = countsPerSec * DISTANCE_PER_COUNT;
+
+        lastEncoderCount = currentCount;
+        lastMeasurementTime = encoderTimestamp;
+    }
+
+    // IMU data capture
+    imuTimestamp = millis();
+    accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+    // Convert raw acceleration data to m/s², and raw gyroscope data to radians per second
+    ax_mss = (float)ax / 16384.0 * g;
+    ay_mss = (float)ay / 16384.0 * g;
+    az_mss = (float)az / 16384.0 * g;
+    gx_rads = (float)gx / 131.0 * (PI / 180.0);
+    gy_rads = (float)gy / 131.0 * (PI / 180.0);
+    gz_rads = (float)gz / 131.0 * (PI / 180.0);
+
+    // Temperature data capture
+    tempTimestamp = millis();
+    temp_sensor.forceConversion();
+    temperature = temp_sensor.readTemperature();
+
+    // Pressure data capture
+    pressureTimestamp = millis();
+    adc_value = ads.readADC_SingleEnded(0);
+
+    // Print data to Serial if connected
+    if (SerialW.getSerialConnected()) {
+        Serial.println("Encoder Data (T:" + String(encoderTimestamp) + "):");
+        Serial.print("Rev: "); Serial.print(revolutions,5); Serial.print("\t");
+        Serial.print("RPM: "); Serial.print(rpm,5); Serial.print("\t");
+        Serial.print("Speed (m/s): "); Serial.print(speed,5); Serial.print("\t");
+        Serial.print("Distance (m): "); Serial.print(distance,5); Serial.println();
+        Serial.println();
+
+        Serial.println("IMU Data (T:" + String(imuTimestamp) + "):");
+        Serial.print("Acceleration (m/s²): ");
+        Serial.print("X="); Serial.print(ax_mss,5); Serial.print("\t");
+        Serial.print("Y="); Serial.print(ay_mss,5); Serial.print("\t");
+        Serial.print("Z="); Serial.print(az_mss,5); Serial.println();
+        Serial.print("Gyroscope (rad/s): ");
+        Serial.print("X="); Serial.print(gx_rads,5); Serial.print("\t");
+        Serial.print("Y="); Serial.print(gy_rads,5); Serial.print("\t");
+        Serial.print("Z="); Serial.print(gz_rads,5); Serial.println();
+        Serial.println();
+
+        Serial.println("Temperature Data (T:" + String(tempTimestamp) + "):");
+        Serial.print("Temperature: "); Serial.println(temperature);
+        Serial.println();
+
+        Serial.println("Pressure Data (T:" + String(pressureTimestamp) + "):");
+        Serial.print("Pressure: "); Serial.println(adc_value);
+        Serial.println();
+    }
+
+    // Assemble JSON string for UDP
+    char jsonBuffer[512];
+    snprintf(jsonBuffer, sizeof(jsonBuffer),
+      "{\"encoder\": {\"timestamp\": %lu, \"revolutions\": %.3f, \"rpm\": %.3f, \"speed\": %.3f, \"distance\": %.3f}, "
+      "\"imu\": {\"timestamp\": %lu, \"acceleration\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}, \"gyroscope\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}}, "
+      "\"temperature\": {\"timestamp\": %lu, \"value\": %.2f}, "
+      "\"pressure\": {\"timestamp\": %lu, \"adc_value\": %d}}",
+      encoderTimestamp, revolutions, rpm, speed, distance,
+      imuTimestamp, ax_mss, ay_mss, az_mss, gx_rads, gy_rads, gz_rads,
+      tempTimestamp, temperature,
+      pressureTimestamp, adc_value);
+
+    // Send over UDP
+    udp.beginPacket(udpAddress, udpPort);
+    udp.print(jsonBuffer);
+    udp.endPacket();
+}
+
+
 void setup() {
     delay(250);
     SerialW.begin(115200);
@@ -227,7 +327,7 @@ void setup() {
     SerialW.println("Initializing IMU devices...");
     accelgyro.initialize();
 
-    // verify connection
+    // Verify connection
     SerialW.println("Testing IMU connections...");
     if (accelgyro.testConnection()) {
       	SerialW.println("MPU6050 connection successful.");
@@ -237,14 +337,13 @@ void setup() {
     }
 
     // Initialize DS3231
-    Serial.println("Initialize DS3231 - temperature sensor");
+    SerialW.println("Initialize DS3231 - temperature sensor");
     temp_sensor.begin();
     
     // Initialize ADC
     Wire1.begin(I2C_1_SDA, I2C_1_SCL);
     SerialW.println("Initializing pressure sensor ADC...");
-    bool result = ads.begin(ADS1X15_ADDRESS, &Wire1);
-    if (!result) {
+    if (!ads.begin(ADS1X15_ADDRESS, &Wire1)) {
         SerialW.println("Failed to initialize pressure sensor ADC, halting program.");
         while (1);
     }
@@ -265,6 +364,11 @@ void loop() {
     }
 
     unsigned long currentTime = millis();
+
+    if (currentTime - lastPrintTime >= printInterval) {
+        dataPrint();
+        lastPrintTime = currentTime;
+    }
     
     // Check for SerialW input
     if (SerialW.available() > 0) {
@@ -283,104 +387,10 @@ void loop() {
             noInterrupts();
             resetCommandReceived = true;
             interrupts();
+
         } else if (input.equals("debug off")) {
             SerialW.println("Turning off debug serial output");
             SerialW.setSerialConnected(false);
         }
     }
-
-    if (currentTime - lastPrintTime >= printInterval) {
-        noInterrupts();  // Disable interrupts while reading volatile
-        long currentCount = encoderCount;
-        interrupts();
-
-        unsigned long timeDelta = currentTime - lastMeasurementTime;
-
-        if (currentCount != lastEncoderCount && timeDelta > 0) {
-            float revolutions = (float)currentCount / COUNTS_PER_REV;
-            float distance = currentCount * DISTANCE_PER_COUNT;
-
-            // Calculate speed
-            float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
-            float rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
-            float speed_m_per_s = countsPerSec * DISTANCE_PER_COUNT;
-
-            char buffer1[150];
-            snprintf(buffer1, sizeof(buffer), 
-                    "Rev: %8.3f  RPM: %8.3f  Speed (m/s): %8.3f  Dist (m): %9.4f", 
-                    revolutions, rpm, speed_m_per_s, distance);
-            SerialW.println(buffer1);
-
-            // Prepare UDP packet
-            udp.beginPacket(udpAddress, udpPort);
-            udp.print(buffer1);
-            udp.endPacket();
-
-            lastEncoderCount = currentCount;
-            lastMeasurementTime = currentTime;
-        }
-
-
-        // read raw accel/gyro measurements from device
-        accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-
-        // Convert raw acceleration data to m/s², and raw gyroscope data to radians per second
-		float ax_mss = (float)ax / 16384.0 * g;
-		float ay_mss = (float)ay / 16384.0 * g;
-		float az_mss = (float)az / 16384.0 * g;
-		float gx_rads = (float)gx / 131.0 * (3.14159265358979323846 / 180.0);
-		float gy_rads = (float)gy / 131.0 * (3.14159265358979323846 / 180.0);
-		float gz_rads = (float)gz / 131.0 * (3.14159265358979323846 / 180.0);
-
-		// Print the acceleration in m/s²
-		SerialW.print("Acceleration (m/s²): "); SerialW.print("\t");
-		SerialW.print("X=");
-		SerialW.print(ax_mss,5); SerialW.print("\t");
-		SerialW.print("Y=");
-		SerialW.print(ay_mss,5); SerialW.print("\t");
-		SerialW.print("Z=");
-		SerialW.print(az_mss,5); SerialW.print("\t"); SerialW.print("\t");
-
-		// Print the gyroscope data in radians per second
-		SerialW.print("Gyroscope (rad/s): "); SerialW.print("\t");
-		SerialW.print("X=");
-		SerialW.print(gx_rads,5); SerialW.print("\t");
-		SerialW.print("Y=");
-		SerialW.print(gy_rads,5); SerialW.print("\t");
-		SerialW.print("Z=");
-		SerialW.println(gz_rads,5);
-        
-        // Prepare UDP packet
-        udp.beginPacket(udpAddress, udpPort);
-        udp.print(buffer2);
-        udp.endPacket();
-
-
-        // read temperature from DS3231
-        temp_sensor.forceConversion();
-        float temp = temp_sensor.readTemperature();
-        SerialW.print("Temperature: "); SerialW.println(temp);
-
-        // Prepare UDP packet
-        udp.beginPacket(udpAddress, udpPort);
-        udp.print(buffer3);
-        udp.endPacket();
-
-
-        // read pressure from ADS1115
-        int16_t adc_value = ads.readADC_SingleEnded(0);
-        SerialW.print("Pressure: "); SerialW.println(adc_value);
-
-        // Prepare UDP packet
-        udp.beginPacket(udpAddress, udpPort);
-        udp.print(buffer4);
-        udp.endPacket();
-
-
-        lastPrintTime = currentTime;
-    }
 }
-
-
-
-//format the packets to be readable in a python dictionary, the recieving side will run a python script. the serial debug format should still be easily readable. use system time to timestamp each data capture. 

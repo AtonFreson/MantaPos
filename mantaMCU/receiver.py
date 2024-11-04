@@ -1,5 +1,7 @@
 import socket
 import threading
+import json
+import sys
 
 # UDP socket parameters
 UDP_IP = ''           # Empty string means to listen on all available network interfaces
@@ -14,25 +16,24 @@ sock.settimeout(1.0)  # Set a timeout of 1 second
 data_lock = threading.Lock()
 received_data = None
 
-def listen_for_udp():
-    global received_data
-    print(f"Listening for incoming UDP packets on port {UDP_PORT}...")
-    try:
-        while True:
-            try:
-                data, addr = sock.recvfrom(1024)  # Buffer size is 1024 bytes
-                with data_lock:
-                    received_data = (addr, data.decode('utf-8'))
-            except socket.timeout:
-                pass  # Just pass if no data is received within the timeout period
-    except Exception as e:
-        print(f"An error occurred in the listener thread: {e}")
-    finally:
-        sock.close()
+# Flag to signal threads to stop
+stop_threads = False
 
-# Start the UDP listener in a separate thread
-udp_thread = threading.Thread(target=listen_for_udp)
-udp_thread.daemon = True  # Ensure the thread exits when the main program exits
+def udp_listener():
+    global received_data
+    while not stop_threads:
+        try:
+            data, addr = sock.recvfrom(1024)  # Buffer size is 1024 bytes
+            with data_lock:
+                received_data = (addr, data.decode())
+        except socket.timeout:
+            continue
+        except Exception as e:
+            print(f"Error in UDP listener: {e}")
+            break
+
+# Start the UDP listener thread
+udp_thread = threading.Thread(target=udp_listener)
 udp_thread.start()
 
 # Main thread can perform other tasks
@@ -41,9 +42,19 @@ try:
         with data_lock:
             if received_data:
                 addr, data = received_data
-                print(f"Received message from {addr}: {data}")
-                received_data = None  # Reset after printing
+                try:
+                    # Parse the JSON data
+                    data_dict = json.loads(data)
+                    print(f"\nReceived data from {addr}:")
+                    print(json.dumps(data_dict, indent=4))  # Pretty-print the dictionary
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse JSON data from {addr}: {e}")
+                    print(f"Raw data: {data}")
+                received_data = None  # Reset after processing
 except KeyboardInterrupt:
     print("Main thread exiting...")
+    stop_threads = True
 finally:
     udp_thread.join()
+    print("UDP listener thread has been terminated.")
+    sys.exit()
