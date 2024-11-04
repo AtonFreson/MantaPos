@@ -1,6 +1,6 @@
 ## MantaPos
 
-> This project uses **Python 3.11.9**.
+> This project uses **Python 3.11.9** and **Arduino IDE 2.3.3**.
 
 Make sure to install the required packages:
 
@@ -19,8 +19,9 @@ From IDE Library Manager:
 - Adafruit ADS1X15
 
 From GitHub:
-> place folders in `C:\Users\<USER>\Documents\Arduino\libraries`
+> Place the folder containing the main library .h file in 
+> `C:\Users\<USER>\Documents\Arduino\libraries`
+> and restart Arduino IDE
 - [ESP32-PoE](https://github.com/OLIMEX/ESP32-POE/tree/master/SOFTWARE/ARDUINO)
-- [DS3231](https://github.com/OLIMEX/MOD-RTC2/tree/master/Software/MOD-RTC2) 
-> Rename folder to DS3231 first
+- [DS3231](https://github.com/OLIMEX/MOD-RTC2/tree/master/Software/MOD-RTC2) - Rename folder to DS3231 first
 - [I2Cdev and MPU6050](https://github.com/jrowberg/i2cdevlib/tree/master/Arduino)
