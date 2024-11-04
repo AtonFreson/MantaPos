@@ -19,9 +19,9 @@ From IDE Library Manager:
 - Adafruit ADS1X15
 
 From GitHub:
-> Place the folder containing the main library .h file in <br /> 
+> Place the folder containing the main <library name>.h file in <br /> 
 > `C:\Users\<USER>\Documents\Arduino\libraries`<br /> 
-> and restart Arduino IDE
+> and restart the Arduino IDE.
 - [ESP32-PoE](https://github.com/OLIMEX/ESP32-POE/tree/master/SOFTWARE/ARDUINO)
-- [DS3231](https://github.com/OLIMEX/MOD-RTC2/tree/master/Software/MOD-RTC2) - Rename folder to DS3231 first
+- [DS3231](https://github.com/OLIMEX/MOD-RTC2/tree/master/Software/MOD-RTC2) *- Rename folder to DS3231 first*
 - [I2Cdev and MPU6050](https://github.com/jrowberg/i2cdevlib/tree/master/Arduino)
