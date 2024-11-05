@@ -11,7 +11,7 @@ CAMERA_TYPE = "4K"
 CAMERA_INPUT = 2 # Select OBS Virtual Camera
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
-use_existing_images = False # Use existing images for calibration, saved in snapshot_dir
+use_existing_images = False # Use existing images for calibration, found in snapshot_dir
 delay_time = 1 # 1s delay between capture
 
 squares_vertically = 5
@@ -134,7 +134,7 @@ else:
         # Detect markers in the frame using the ArUcoDetector class
         marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(gray_frame)
 
-        if marker_ids is not None and len(marker_ids) > 0:
+        if marker_ids is not None and len(marker_ids) >= 2:
         # Refine detected markers for better accuracy
             detector.refineDetectedMarkers(
                 image=gray_frame,
@@ -157,19 +157,18 @@ else:
             # Draw the markers on the frame for visual feedback
             cv2.aruco.drawDetectedMarkers(frame, marker_corners, marker_ids)
 
-            # If at least 2 markers and 6 corners are detected, save the frame
-            if len(marker_ids) >= 2:
-                if charucoIds is not None and len(charucoCorners) >= 6 and time.time() >= next_snapshot_time:
-                    # Save the frame to the snapshots folder
-                    snapshot_filename = os.path.join(snapshot_dir, f'snapshot_{snapshot_counter:04d}.png')
-                    cv2.imwrite(snapshot_filename, gray_frame)
-                    print(f"Saved snapshot: {snapshot_filename}")
-                    snapshot_counter += 1
+            # If at least 6 corners are detected, save the frame
+            if charucoIds is not None and len(charucoCorners) >= 6 and time.time() >= next_snapshot_time:
+                # Save the frame to the snapshots folder
+                snapshot_filename = os.path.join(snapshot_dir, f'snapshot_{snapshot_counter:04d}.png')
+                cv2.imwrite(snapshot_filename, gray_frame)
+                print(f"Saved snapshot: {snapshot_filename}")
+                snapshot_counter += 1
 
-                    all_charuco_corners.append(charucoCorners)
-                    all_charuco_ids.append(charucoIds)
+                all_charuco_corners.append(charucoCorners)
+                all_charuco_ids.append(charucoIds)
 
-                    next_snapshot_time = time.time() + delay_time  # Wait another X ms before the next snapshot
+                next_snapshot_time = time.time() + delay_time  # Wait another X ms before the next snapshot
 
         # Display the camera preview
         manta.resize_window_with_aspect_ratio("Camera Preview", frame)
@@ -192,7 +191,7 @@ if all_charuco_corners and all_charuco_ids:
         charucoCorners=all_charuco_corners,
         charucoIds=all_charuco_ids,
         board=board,
-        imageSize=gray_frame.shape[::-1],
+        imageSize=gray_frame.shape,
         cameraMatrix=None,
         distCoeffs=None)
     

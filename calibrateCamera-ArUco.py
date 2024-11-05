@@ -124,7 +124,7 @@ if all_object_points and all_image_points:
     # Perform camera calibration
     print("Calibrating...")
     ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
-        all_object_points, all_image_points, gray_frame.shape[::-1], None, None, flags=cv2.CALIB_USE_LU
+        all_object_points, all_image_points, gray_frame.shape, None, None, flags=cv2.CALIB_USE_LU
     )
 
     # Save calibration data

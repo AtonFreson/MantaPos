@@ -86,7 +86,6 @@ while True:
 
     # Convert to grayscale
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
     # Detect ArUco markers
     corners, ids, rejected_img_points = detector.detectMarkers(gray_frame)
 
