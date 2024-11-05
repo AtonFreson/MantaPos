@@ -3,11 +3,12 @@ import numpy as np
 import os
 from math import atan2, sqrt
 import mantaPosLib as manta
+import genMarker
 
 
 
 # ArUco marker settings
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+aruco_dict = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
 detector_params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(aruco_dict, detector_params)
 
@@ -19,8 +20,9 @@ marker_border_size = 25
 num_markers = 0 # Set to 0 if all
 
 # Set the selected camera: axis, axis_low or gopro.
-CAMERA_TYPE = "axis"
+CAMERA_TYPE = "4K"
 CAMERA_INPUT = 2 # OBS Virtual Camera
+CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 marker_length = marker_size/screen_dpm # in meters
 
@@ -38,6 +40,8 @@ match CAMERA_TYPE:
         calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_axis_low.npz'))
     case "gopro":
         calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_gopro.npz'))
+    case "4K":
+        calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_4K.npz'))
 camera_matrix = calibration_data['camera_matrix']
 dist_coeffs = calibration_data['dist_coeffs']
 
@@ -48,8 +52,13 @@ grid_cols = grid_rows # Assume square
 grid_marker_spacing = marker_length * (marker_border_size*2 / marker_size + 1) # Distance between markers in the grid (meters)
 
 # Initialize camera
-cap = cv2.VideoCapture(CAMERA_INPUT) 
+if CAMERA_TYPE == "4K":
+    #cap = cv2.VideoCapture(CAMERA_RTSP_ADDR)
+    cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
+else:
+    cap = cv2.VideoCapture(CAMERA_INPUT)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
+
 match CAMERA_TYPE:
     case "axis":
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
@@ -59,6 +68,9 @@ match CAMERA_TYPE:
     case "gopro":
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    case "4K":
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
 
 if not cap.isOpened():
     print("Error: Could not open camera.")
@@ -124,6 +136,8 @@ while True:
                 manta.display_position(frame, tvec_list, rvec_list, markers_pos_rot)
             case "gopro":
                 manta.display_position(frame, tvec_list, rvec_list, markers_pos_rot, font_scale=1.5, thickness=2, rect_padding=(10,10,1100,280))
+            case "4K":
+                manta.display_position(frame, tvec_list, rvec_list, markers_pos_rot, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,400))
 
     # Display the camera preview with position overlay
     manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame)

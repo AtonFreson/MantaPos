@@ -22,7 +22,7 @@ marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; 
 square_length = 0.2975/6 # Real world length of square in meters. Meeting room: 1.181/7
 
 # Generate and display the marker grid
-board, dictionary = genMarker.create_and_save_ChArUco_board(square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
+board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
 manta.display_marker_grid(board_type="ChArUco")
 
 # Define the detector and parameters
@@ -114,7 +114,9 @@ while True:
         # Draw detected markers and ChArUco corners
         cv2.aruco.drawDetectedMarkers(frame, corners, ids)
         if charuco_ids is not None and num_corners > 0:
-            cv2.aruco.drawDetectedCornersCharuco(frame, charuco_corners, charuco_ids)
+            cv2.aruco.drawDetectedCornersCharuco(frame, charuco_corners, charuco_ids, cornerColor=(0, 255, 0))
+            for i, corner in enumerate(charuco_corners):
+                cv2.putText(frame, str(charuco_ids[i][0]), (int(corner[0][0]), int(corner[0][1])), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
 
         if charuco_ids is not None and num_corners >= 6:
             # Estimate pose of the ChArUco board

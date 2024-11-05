@@ -19,18 +19,20 @@ def generate_aruco_marker(id, dictionary=ARUCO_DICT, size=2000):
     cv2.imwrite(file_name, marker_image)
     print(f"Marker {id} saved as {file_name}")
 
-def create_and_save_ChArUco_board(sq_len, margin_px, mrkr_ratio=0.9, sqs_vert=5, sqs_hor=7):
+def create_and_save_ChArUco_board(sq_len_meters, sq_pixels, margin_pixels, mrkr_ratio=0.9, sqs_vert=5, sqs_hor=7):
     dictionary = aruco.getPredefinedDictionary(ARUCO_DICT)
-    board = aruco.CharucoBoard((sqs_hor, sqs_vert), sq_len, round(sq_len*mrkr_ratio), dictionary)
-    img_size = tuple((sqs_hor*sq_len + margin_px*2, sqs_vert*sq_len + margin_px*2))
-    img = aruco.CharucoBoard.generateImage(board, img_size, marginSize=margin_px)
+    int_marker_len_in_image = sq_len_meters*(round(sq_pixels*mrkr_ratio)/sq_pixels)
     
+    board = aruco.CharucoBoard((sqs_hor, sqs_vert), sq_len_meters, int_marker_len_in_image, dictionary)
+    
+    img_size = tuple((sqs_hor*sq_pixels + margin_pixels*2, sqs_vert*sq_pixels + margin_pixels*2))
+    img = aruco.CharucoBoard.generateImage(board, img_size, marginSize=margin_pixels)
     file_name = os.path.join(calib_dir, file_path)
     cv2.imwrite(file_name, img)
 
     return board, dictionary
 
-# Generate Aruco marker with ID 18, and forward
+# Generate Aruco marker starting with ID 18, and forward
 if __name__ == "__main__":
     if not os.path.exists(calib_dir):
         os.makedirs(calib_dir)
