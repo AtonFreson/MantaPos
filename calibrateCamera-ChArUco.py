@@ -5,14 +5,14 @@ import time
 import mantaPosLib as manta
 import shutil
 import genMarker
-                                                        # axis calib: ~700
+
 # Set the selected camera: 4K, gopro or axis.
-CAMERA_TYPE = "axis"
+CAMERA_TYPE = "4K"
 CAMERA_INPUT = 2 # Select OBS Virtual Camera
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 use_existing_images = True # Use existing images for calibration, found in snapshot_dir
-delay_time = 0.5 # 1s delay between capture
+delay_time = 1 # 1s delay between capture
 
 squares_vertically = 5
 squares_horizontally = 7
@@ -77,39 +77,29 @@ def load_images_and_detect_ChArUco(directory_path):
     for idx, filename in enumerate(image_files):
         image_path = os.path.join(directory_path, filename)
         gray_frame = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        #gray_frame = cv2.resize(gray_frame, (1280, 720))
         if gray_frame is None:
             continue
 
         # Detect markers in the frame using the ArUcoDetector class
         marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(gray_frame)
 
-        if marker_ids is not None and len(marker_ids) > 0:
-        # Refine detected markers for better accuracy
-            detector.refineDetectedMarkers(
-                image=gray_frame,
-                board=board,
-                detectedCorners=marker_corners,
-                detectedIds=marker_ids,
-                rejectedCorners=rejectedCandidates
-            )
+        if marker_ids is not None and len(marker_ids) >= 2:
+            # Refine detected markers for better accuracy
+            detector.refineDetectedMarkers(gray_frame, board, marker_corners, marker_ids, rejectedCandidates)
 
-            # Interpolate ChArUco corners
-            num_corners, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(
-                markerCorners=marker_corners,
-                markerIds=marker_ids,
-                image=gray_frame,
-                board=board
-            )
+            # Save detected marker corners (for calibration)
+            num_corners, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, gray_frame, board)
 
-            # If at least 2 markers and 6 corners are detected, save the frame
-            if len(marker_ids) >= 2:
-                if charucoIds is not None and len(charucoCorners) >= 6:
-                    all_charuco_corners.append(charucoCorners)
-                    all_charuco_ids.append(charucoIds)
+            # If at least 6 corners are detected, save the frame
+            if charucoIds is not None and len(charucoCorners) >= 6:
+                all_charuco_corners.append(charucoCorners)
+                all_charuco_ids.append(charucoIds)
 
         # Print progress
         print(f"Processed image {idx + 1} of {total_images}. Detected {len(charucoIds)} ChArUco corners.")
     return all_charuco_corners, all_charuco_ids, gray_frame
+
 
 if use_existing_images:
     print("Using existing images for calibration.")
@@ -135,22 +125,11 @@ else:
         marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(gray_frame)
 
         if marker_ids is not None and len(marker_ids) >= 2:
-        # Refine detected markers for better accuracy
-            detector.refineDetectedMarkers(
-                image=gray_frame,
-                board=board,
-                detectedCorners=marker_corners,
-                detectedIds=marker_ids,
-                rejectedCorners=rejectedCandidates
-            )
+            # Refine detected markers for better accuracy
+            detector.refineDetectedMarkers(gray_frame, board, marker_corners, marker_ids, rejectedCandidates)
 
-            # Interpolate ChArUco corners
-            num_corners, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(
-                markerCorners=marker_corners,
-                markerIds=marker_ids,
-                image=gray_frame,
-                board=board
-            )
+            # Interpolate ChArUco corners from detected markers and image frame
+            num_corners, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, gray_frame, board)
             
             # Censor the markers
             frame = manta.censor_marker(frame, marker_corners, "diamond")
@@ -187,13 +166,8 @@ else:
 if all_charuco_corners and all_charuco_ids:
     # Perform camera calibration
     print("Calibrating...")
-    ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
-        charucoCorners=all_charuco_corners,
-        charucoIds=all_charuco_ids,
-        board=board,
-        imageSize=gray_frame.shape,
-        cameraMatrix=None,
-        distCoeffs=None)
+    result, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
+        all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)
     
     # Save calibration data
     if CAMERA_TYPE == "axis":
