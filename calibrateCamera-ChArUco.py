@@ -5,14 +5,14 @@ import time
 import mantaPosLib as manta
 import shutil
 import genMarker
-
+                                                        # axis calib: ~700
 # Set the selected camera: 4K, gopro or axis.
-CAMERA_TYPE = "4K"
+CAMERA_TYPE = "axis"
 CAMERA_INPUT = 2 # Select OBS Virtual Camera
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
-use_existing_images = False # Use existing images for calibration, found in snapshot_dir
-delay_time = 1 # 1s delay between capture
+use_existing_images = True # Use existing images for calibration, found in snapshot_dir
+delay_time = 0.5 # 1s delay between capture
 
 squares_vertically = 5
 squares_horizontally = 7

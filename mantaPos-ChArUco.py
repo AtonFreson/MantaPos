@@ -9,7 +9,7 @@ import genMarker
 
 # Initialize parameters
 # Set the selected camera: '4K', 'gopro' or 'axis'.
-CAMERA_TYPE = "4K"
+CAMERA_TYPE = "axis"
 CAMERA_INPUT = 2  # Camera index if the source is webcam-based
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
@@ -17,7 +17,7 @@ CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT
 squares_vertically = 5
 squares_horizontally = 7
 square_pixels = 200 # Pixel size of the chessboard squares
-grid_edge = 20 # Pixel margin outside the ChArUco grid
+grid_edge = 30 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
 square_length = 0.2975/6 # Real world length of square in meters. Meeting room: 1.181/7
 
