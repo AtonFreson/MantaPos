@@ -13,7 +13,7 @@ npz_files = [file for file in all_files if file.endswith('.npz')]
 for file in npz_files:
     file_path = os.path.join(calibration_dir, file)
     with np.load(file_path) as data:
-        print(f"Contents of {file}:")
+        print(f"Contents of {file} - ", end="")
         for key, value in data.items():
-            print(f"{key}: {value}")
+            print(f"{key}:\n{value}")
         print()
