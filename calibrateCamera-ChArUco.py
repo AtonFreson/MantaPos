@@ -12,7 +12,7 @@ CAMERA_INPUT = 2 # Select OBS Virtual Camera
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 use_existing_images = True # Use existing images for calibration, found in snapshot_dir
-delay_time = 1 # 1s delay between capture
+delay_time = 2 # 1s delay between capture
 
 squares_vertically = 5
 squares_horizontally = 7
@@ -77,9 +77,13 @@ def load_images_and_detect_ChArUco(directory_path):
     for idx, filename in enumerate(image_files):
         image_path = os.path.join(directory_path, filename)
         gray_frame = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        #gray_frame = cv2.resize(gray_frame, (1280, 720))
+
         if gray_frame is None:
             continue
+        
+        #gray_frame = manta.frame_corner_cutout(gray_frame, 0.3)  # Cut out the corners of the frame        
+        #gray_frame = manta.frame_crop(gray_frame, 0.7)  # Crop the frame to remove fisheye distortion
+
 
         # Detect markers in the frame using the ArUcoDetector class
         marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(gray_frame)
@@ -90,7 +94,7 @@ def load_images_and_detect_ChArUco(directory_path):
 
             # Save detected marker corners (for calibration)
             num_corners, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, gray_frame, board)
-
+            
             # If at least 6 corners are detected, save the frame
             if charucoIds is not None and len(charucoCorners) >= 6:
                 all_charuco_corners.append(charucoCorners)
@@ -166,9 +170,33 @@ else:
 if all_charuco_corners and all_charuco_ids:
     # Perform camera calibration
     print("Calibrating...")
-    result, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
-        all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)
+    print(gray_frame.shape[:2])
+    result, camera_matrix, dist_coeffs, _, _ = cv2.aruco.calibrateCameraCharuco(all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)
     
+    '''cameraMatrixInit = np.array([[ 1900.,    0., gray_frame.shape[0]/2.],
+                                 [    0., 1900., gray_frame.shape[1]/2.],
+                                 [    0.,    0.,           1.]])
+
+    distCoeffsInit = np.zeros((5,1))
+    #distCoeffsInit = np.array([[ 2.62894047e-01],[-8.51860457e-02],[ 4.99831259e-04],[-3.46592485e-03],[ 6.44091108e-01]])
+    #flags = (cv2.CALIB_USE_INTRINSIC_GUESS + cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_FIX_ASPECT_RATIO)
+    flags = (cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_FIX_ASPECT_RATIO)
+    #flags = (cv2.CALIB_RATIONAL_MODEL)
+    (ret, camera_matrix, dist_coeffs,
+     _, _,
+     stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+     perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                      charucoCorners=all_charuco_corners,
+                      charucoIds=all_charuco_ids,
+                      board=board,
+                      imageSize=gray_frame.shape,
+                      #cameraMatrix=cameraMatrixInit,
+                      #distCoeffs=distCoeffsInit,
+                      cameraMatrix=None,
+                      distCoeffs=None,
+                      flags=flags,
+                      criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 10000, 1e-9))'''
+
     # Save calibration data
     if CAMERA_TYPE == "axis":
         camera_calibration_name = 'camera_calibration_axis.npz'
@@ -182,7 +210,7 @@ if all_charuco_corners and all_charuco_ids:
 
     print("Calibration complete.\n")
     print("Camera matrix:\n", camera_matrix)
-    print("Distortion coefficients:\n", dist_coeffs)
+    print("Distortion coefficients:\n", dist_coeffs.T)
     print("Saved calibration data to", camera_calibration_name)
 else:
     print("Insufficient data for calibration.")

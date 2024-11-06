@@ -573,3 +573,51 @@ class RealtimeCapture:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Support for with statement"""
         self.stop()
+
+def frame_corner_cutout(frame, cutout_size=0.2):
+    if cutout_size <= 0 or cutout_size >= 0.5:
+        raise ValueError("Cutout size must be between 0 and 0.5.")
+
+    # Get frame dimensions
+    height, width = frame.shape[:2]
+    width_offset = int(width * cutout_size)
+    height_offset = int(height * cutout_size)
+
+    # Define the points of the octagon
+    pts = np.array([
+        [width_offset, 0],
+        [width - width_offset, 0],
+        [width - 1, height_offset],
+        [width - 1, height - height_offset],
+        [width - width_offset, height - 1],
+        [width_offset, height - 1],
+        [0, height - height_offset],
+        [0, height_offset]
+    ], np.int32)
+
+    # Create a mask
+    mask = np.zeros((height, width), dtype=np.uint8)
+    cv2.fillPoly(mask, [pts], 255)
+
+    # Apply the mask to the frame
+    frame = cv2.bitwise_and(frame, frame, mask=mask)
+
+    return frame
+
+def frame_crop(frame, crop_size=0.7):
+
+    # Get original dimensions
+    height, width = frame.shape
+    
+    # Calculate new dimensions
+    new_width = int(width * crop_size)
+    new_height = int(height * crop_size)
+    
+    # Calculate crop coordinates to keep center
+    start_x = (width - new_width) // 2
+    start_y = (height - new_height) // 2
+    
+    # Crop the frame
+    frame = frame[start_y:start_y + new_height, start_x:start_x + new_width]
+
+    return frame
