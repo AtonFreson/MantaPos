@@ -185,6 +185,60 @@ def censor_marker(frame, corners, type = "blur"):
 
     return frame
 
+# Censor the ChArUco board by drawing a black rectangle over it
+def censor_charuco_board(frame, charucoCorners, marker_corners, margin_percentage=0.1):
+    # Check if charucoCorners is valid
+    if (charucoCorners is None or len(charucoCorners) == 0) and (marker_corners is None or len(marker_corners) == 0):
+        return frame
+
+    # Collect all corner points from charucoCorners and marker_corners
+    all_corners = []
+
+    if charucoCorners is not None and len(charucoCorners) > 0:
+        all_corners.extend(charucoCorners.reshape(-1, 2))
+
+    if marker_corners is not None and len(marker_corners) > 0:
+        for marker in marker_corners:
+            all_corners.extend(marker.reshape(-1, 2))
+
+    # Convert to numpy array of float coordinates
+    corners = np.array(all_corners, dtype=np.float32)
+
+    # Compute the convex hull of all the corner points
+    hull = cv2.convexHull(corners)
+
+    # Compute the centroid of the convex hull
+    M = cv2.moments(hull)
+    if M['m00'] == 0:
+        # Avoid division by zero
+        cX = np.mean(hull[:, 0, 0])
+        cY = np.mean(hull[:, 0, 1])
+    else:
+        cX = M['m10'] / M['m00']
+        cY = M['m01'] / M['m00']
+    centroid = np.array([cX, cY])
+
+    # Expand the hull points by the margin_percentage
+    expanded_hull = []
+    for point in hull[:, 0, :]:
+        vector = point - centroid
+        expanded_point = centroid + vector * (1 + margin_percentage)
+        expanded_hull.append(expanded_point)
+    expanded_hull = np.array(expanded_hull, dtype=np.float32)
+
+    # Clip the points to be within image boundaries
+    height, width = frame.shape[:2]
+    expanded_hull[:, 0] = np.clip(expanded_hull[:, 0], 0, width - 1)
+    expanded_hull[:, 1] = np.clip(expanded_hull[:, 1], 0, height - 1)
+
+    # Convert to integer coordinates for drawing
+    expanded_hull = expanded_hull.astype(np.int32)
+
+    # Fill the expanded convex hull with black color to censor the board area
+    cv2.fillConvexPoly(frame, expanded_hull, color=(0, 0, 0))
+
+    return frame
+
 # Function to calculate the global position and rotation of the camera based on multiple markers, 
 # and display it overlaid on the video feed, together with the standard deviation of the estimates  
 def display_position(frame, tvec_list, rvec_list, marker_pos_rot, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8,
@@ -574,14 +628,17 @@ class RealtimeCapture:
         """Support for with statement"""
         self.stop()
 
-def frame_corner_cutout(frame, cutout_size=0.2):
+def frame_corner_cutout(frame, cutout_size=0.2, absolute=True):
     if cutout_size <= 0 or cutout_size >= 0.5:
         raise ValueError("Cutout size must be between 0 and 0.5.")
 
     # Get frame dimensions
     height, width = frame.shape[:2]
-    width_offset = int(width * cutout_size)
     height_offset = int(height * cutout_size)
+    if absolute:
+        width_offset = height_offset
+    else:
+        width_offset = int(width * cutout_size)
 
     # Define the points of the octagon
     pts = np.array([
@@ -607,7 +664,7 @@ def frame_corner_cutout(frame, cutout_size=0.2):
 def frame_crop(frame, crop_size=0.7):
 
     # Get original dimensions
-    height, width = frame.shape
+    height, width = frame.shape[:2]
     
     # Calculate new dimensions
     new_width = int(width * crop_size)

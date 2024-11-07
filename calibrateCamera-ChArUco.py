@@ -12,14 +12,14 @@ CAMERA_INPUT = 2 # Select OBS Virtual Camera
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 use_existing_images = True # Use existing images for calibration, found in snapshot_dir
-delay_time = 2 # 1s delay between capture
+delay_time = 1 # 1s delay between capture
 
-squares_vertically = 5
-squares_horizontally = 7
-square_pixels = 200 # Pixel size of the chessboard squares
+squares_vertically = 7
+squares_horizontally = 12
+square_pixels = 140 # Pixel size of the chessboard squares
 grid_edge = 30 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
-square_length = 0.2975/6 # Real world length of square in meters
+square_length = 0.2975/6 * square_pixels/200 # Real world length of square in meters
 
 # Generate and display the marker grid
 board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
@@ -75,6 +75,10 @@ def load_images_and_detect_ChArUco(directory_path):
     image_files = [f for f in os.listdir(directory_path) if f.endswith(('.png', '.jpg', '.jpeg'))]
     total_images = len(image_files)
     for idx, filename in enumerate(image_files):
+
+        if idx%6 != 5:
+            continue
+
         image_path = os.path.join(directory_path, filename)
         gray_frame = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
@@ -82,11 +86,11 @@ def load_images_and_detect_ChArUco(directory_path):
             continue
         
         #gray_frame = manta.frame_corner_cutout(gray_frame, 0.3)  # Cut out the corners of the frame        
-        #gray_frame = manta.frame_crop(gray_frame, 0.7)  # Crop the frame to remove fisheye distortion
-
+        #gray_frame = manta.frame_crop(gray_frame, 0.7)  # Crop the frame to remove fisheye edges
 
         # Detect markers in the frame using the ArUcoDetector class
         marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(gray_frame)
+        charucoIds = []
 
         if marker_ids is not None and len(marker_ids) >= 2:
             # Refine detected markers for better accuracy
@@ -122,6 +126,9 @@ else:
             print("Error: Could not read from camera.")
             break
 
+        #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
+        #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges   
+
         # Convert to grayscale
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -137,6 +144,8 @@ else:
             
             # Censor the markers
             frame = manta.censor_marker(frame, marker_corners, "diamond")
+            frame = manta.censor_charuco_board(frame, charucoCorners, marker_corners, 0.5)
+
             # Draw the markers on the frame for visual feedback
             cv2.aruco.drawDetectedMarkers(frame, marker_corners, marker_ids)
 
@@ -170,18 +179,31 @@ else:
 if all_charuco_corners and all_charuco_ids:
     # Perform camera calibration
     print("Calibrating...")
-    print(gray_frame.shape[:2])
-    result, camera_matrix, dist_coeffs, _, _ = cv2.aruco.calibrateCameraCharuco(all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)
-    
-    '''cameraMatrixInit = np.array([[ 1900.,    0., gray_frame.shape[0]/2.],
-                                 [    0., 1900., gray_frame.shape[1]/2.],
-                                 [    0.,    0.,           1.]])
 
-    distCoeffsInit = np.zeros((5,1))
+    #result, camera_matrix, dist_coeffs, _, _ = cv2.aruco.calibrateCameraCharuco(all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)
+    
+    # Load previously saved camera calibration data
+    calibration_dir = './camera_calibrations'
+    match CAMERA_TYPE:
+        case "axis":
+            calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_axis.npz'))
+        case "axis_low":
+            calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_axis_low.npz'))
+        case "gopro":
+            calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_gopro.npz'))
+        case "4K":
+            calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_4K.npz'))
+    cameraMatrixInit = calibration_data['camera_matrix']
+    distCoeffsInit = calibration_data['dist_coeffs']
+
+    #cameraMatrixInit = np.array([[ 2100.,    0., gray_frame.shape[0]/2.], [    0., 2100., gray_frame.shape[1]/2.], [    0.,    0.,           1.]])
+    #distCoeffsInit = np.zeros((5,1))
     #distCoeffsInit = np.array([[ 2.62894047e-01],[-8.51860457e-02],[ 4.99831259e-04],[-3.46592485e-03],[ 6.44091108e-01]])
-    #flags = (cv2.CALIB_USE_INTRINSIC_GUESS + cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_FIX_ASPECT_RATIO)
-    flags = (cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_FIX_ASPECT_RATIO)
+    
+    flags = (cv2.CALIB_USE_INTRINSIC_GUESS + cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_FIX_ASPECT_RATIO)
+    #flags = (cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_FIX_ASPECT_RATIO)
     #flags = (cv2.CALIB_RATIONAL_MODEL)
+    
     (ret, camera_matrix, dist_coeffs,
      _, _,
      stdDeviationsIntrinsics, stdDeviationsExtrinsics,
@@ -190,12 +212,10 @@ if all_charuco_corners and all_charuco_ids:
                       charucoIds=all_charuco_ids,
                       board=board,
                       imageSize=gray_frame.shape,
-                      #cameraMatrix=cameraMatrixInit,
-                      #distCoeffs=distCoeffsInit,
-                      cameraMatrix=None,
-                      distCoeffs=None,
+                      cameraMatrix=cameraMatrixInit,
+                      distCoeffs=distCoeffsInit,
                       flags=flags,
-                      criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 10000, 1e-9))'''
+                      criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 10000, 1e-9))
 
     # Save calibration data
     if CAMERA_TYPE == "axis":

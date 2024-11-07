@@ -14,12 +14,12 @@ CAMERA_INPUT = 3  # Camera index if the source is webcam-based
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 # ChArUco board settings
-squares_vertically = 5
-squares_horizontally = 7
-square_pixels = 200 # Pixel size of the chessboard squares
+squares_vertically = 7
+squares_horizontally = 12
+square_pixels = 140 # Pixel size of the chessboard squares
 grid_edge = 20 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
-square_length = 0.2975/6 # Real world length of square in meters. Meeting room: 1.181/7
+square_length = 0.2975/6 * square_pixels/200 # Real world length of square in meters. Meeting room: 1.181/7
 
 # Generate and display the marker grid
 board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
@@ -84,7 +84,8 @@ while True:
         print("Error: Could not read from camera.")
         break
     
-    #frame = manta.corner_cutout(frame, 0.3)  # Cut out the corners of the frame
+    #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
+    #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges   
 
     #frame = cv2.resize(frame, (1280, 720))
 
