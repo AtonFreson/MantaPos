@@ -76,7 +76,7 @@ def load_images_and_detect_ChArUco(directory_path):
     total_images = len(image_files)
     for idx, filename in enumerate(image_files):
 
-        if idx%6 != 5:
+        if idx%3 != 0:
             continue
 
         image_path = os.path.join(directory_path, filename)
@@ -180,10 +180,10 @@ if all_charuco_corners and all_charuco_ids:
     # Perform camera calibration
     print("Calibrating...")
 
-    #result, camera_matrix, dist_coeffs, _, _ = cv2.aruco.calibrateCameraCharuco(all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)
+    result, camera_matrix, dist_coeffs, _, _ = cv2.aruco.calibrateCameraCharuco(all_charuco_corners, all_charuco_ids, board, gray_frame.shape[:2], None, None)
     
     # Load previously saved camera calibration data
-    calibration_dir = './camera_calibrations'
+    '''calibration_dir = './camera_calibrations'
     match CAMERA_TYPE:
         case "axis":
             calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_axis.npz'))
@@ -196,7 +196,7 @@ if all_charuco_corners and all_charuco_ids:
     cameraMatrixInit = calibration_data['camera_matrix']
     distCoeffsInit = calibration_data['dist_coeffs']
 
-    #cameraMatrixInit = np.array([[ 2100.,    0., gray_frame.shape[0]/2.], [    0., 2100., gray_frame.shape[1]/2.], [    0.,    0.,           1.]])
+    #cameraMatrixInit = np.array([[ 2000.,    0., gray_frame.shape[0]/2.], [    0., 2000., gray_frame.shape[1]/2.], [    0.,    0.,           1.]])
     #distCoeffsInit = np.zeros((5,1))
     #distCoeffsInit = np.array([[ 2.62894047e-01],[-8.51860457e-02],[ 4.99831259e-04],[-3.46592485e-03],[ 6.44091108e-01]])
     
@@ -215,7 +215,7 @@ if all_charuco_corners and all_charuco_ids:
                       cameraMatrix=cameraMatrixInit,
                       distCoeffs=distCoeffsInit,
                       flags=flags,
-                      criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 10000, 1e-9))
+                      criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 10000, 1e-9))'''
 
     # Save calibration data
     if CAMERA_TYPE == "axis":

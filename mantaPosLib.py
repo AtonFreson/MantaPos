@@ -598,6 +598,9 @@ class RealtimeCapture:
                 with self._frame_lock:
                     self._current_frame = frame
                     self._current_timestamp = timestamp
+            else:
+                print("Error: Could not read from camera.")
+                self.stop()
             
             time.sleep(0.001)
                     

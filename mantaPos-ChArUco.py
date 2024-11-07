@@ -11,15 +11,18 @@ import genMarker
 # Set the selected camera: '4K', 'gopro' or 'axis'.
 CAMERA_TYPE = "4K"
 CAMERA_INPUT = 3  # Camera index if the source is webcam-based
-CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
+CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.56.12:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 # ChArUco board settings
-squares_vertically = 7
-squares_horizontally = 12
-square_pixels = 140 # Pixel size of the chessboard squares
-grid_edge = 20 # Pixel margin outside the ChArUco grid
-marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
-square_length = 0.2975/6 * square_pixels/200 # Real world length of square in meters. Meeting room: 1.181/7
+squares_vertically = 6
+squares_horizontally = squares_vertically
+square_pixels = int(250*7/squares_horizontally) # Pixel size of the chessboard squares
+grid_edge = 60 # Pixel margin outside the ChArUco grid
+marker_ratio = 0.75 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
+#square_length = 0.2975/6 * square_pixels/200 # Real worl-d length of square in meters
+square_length = 1.110/7 * square_pixels/280 # Lyftkranen - large conference room screen
+
+print(f"Reference length of {squares_horizontally} squares:", square_length*squares_horizontally, "meters")
 
 # Generate and display the marker grid
 board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
@@ -33,6 +36,7 @@ detector = cv2.aruco.ArucoDetector(dictionary, params)
 if CAMERA_TYPE == "4K":
     #cap = cv2.VideoCapture(CAMERA_RTSP_ADDR)
     cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
+    cv2.waitKey(500)
 else:
     cap = cv2.VideoCapture(CAMERA_INPUT)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
@@ -62,7 +66,7 @@ match CAMERA_TYPE:
     case "gopro":
         calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_gopro.npz'))
     case "4K":
-        calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_4K.npz'))
+        calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_4K_6s.npz'))
 camera_matrix = calibration_data['camera_matrix']
 dist_coeffs = calibration_data['dist_coeffs']
 
@@ -87,10 +91,9 @@ while True:
     #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
     #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges   
 
-    #frame = cv2.resize(frame, (1280, 720))
-
     # Convert to grayscale
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
     # Detect ArUco markers
     corners, ids, rejected_img_points = detector.detectMarkers(gray_frame)
 
@@ -113,7 +116,11 @@ while True:
         )
 
         # Modify the displayed markers to make them unreadable. Use: blur, cross, fill, diamond
-        frame = manta.censor_marker(frame, corners, "diamond")
+        try:
+            frame = manta.censor_marker(frame, corners, "diamond")
+            #frame = manta.censor_charuco_board(frame, charuco_corners, corners, 0.5)
+        except:
+            pass
 
         # Draw detected markers and ChArUco corners
         cv2.aruco.drawDetectedMarkers(frame, corners, ids)
@@ -123,7 +130,7 @@ while True:
                 for i, corner in enumerate(charuco_corners):
                     cv2.putText(frame, str(charuco_ids[i][0]), (int(corner[0][0]), int(corner[0][1])), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
 
-        if charuco_ids is not None and num_corners >= 6:
+        if charuco_ids is not None and num_corners >= 4:
             # Estimate pose of the ChArUco board
             success, rvec, tvec = cv2.aruco.estimatePoseCharucoBoard(
                 charucoCorners=charuco_corners,
@@ -158,7 +165,6 @@ while True:
                     case "gopro":
                         manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.5, thickness=2, rect_padding=(10,10,1100,280))
                     case "4K":
-                        #manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.3, thickness=2, rect_padding=(10,10,1000,200))
                         manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,400))
                 # Draw axis on the board
                 #cv2.aruco.drawAxis(frame, camera_matrix, dist_coeffs, rvec, tvec, square_length)
@@ -167,9 +173,9 @@ while True:
         pass
 
     # Undistort the camera feed
-    h, w = frame.shape[:2]
-    new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w, h), 1)
-    frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
+    #h, w = frame.shape[:2]
+    #new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w, h), 1)
+    #frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
 
     # Display the camera preview with position overlay
     manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame)  # Ensure this function exists

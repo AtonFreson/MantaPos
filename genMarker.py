@@ -5,7 +5,7 @@ import os
 calib_dir = './markers'
 file_path = 'ChArUco_Marker.png'
 
-ARUCO_DICT = cv2.aruco.DICT_5X5_100  # Dictionary ID
+ARUCO_DICT = cv2.aruco.DICT_5X5_50  # Dictionary ID
 
 def generate_aruco_marker(id, dictionary=ARUCO_DICT, size=2000):
     # Get the predefined dictionary based on the specified type
