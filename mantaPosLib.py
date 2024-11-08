@@ -577,7 +577,7 @@ class RealtimeCapture:
             self._running = True
             self._capture_thread = Thread(target=self._capture_frames, daemon=True)
             self._capture_thread.start()
-            time.sleep(0.1)  # Short wait for first frame
+            time.sleep(0.5)  # Short wait for first frame
         
     def stop(self):
         """Stop the camera capture"""
