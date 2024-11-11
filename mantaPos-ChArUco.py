@@ -85,6 +85,8 @@ board_rot = [0,0,0]  # Euler rotation of the marker in degrees, origin is normal
 
 # Main loop
 while True:
+    success = False
+
     # Capture camera frame
     ret, frame = cap.read()
     if not ret:
@@ -162,30 +164,24 @@ while True:
                 # Draw axes of the board
                 cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, rvec, tvec, square_length*squares_vertically/2, round(square_length*square_pixels/2))
 
-                # Display the undistorted camera feed if selected, based on the calibration data
-                if visualise_calib_dist:
-                    if new_camera_matrix is None:
-                        h, w = frame.shape[:2]
-                        new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w,h), 1)
-                    frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
+    # Display the undistorted camera feed if selected, based on the calibration data
+    if visualise_calib_dist:
+        if new_camera_matrix is None:
+            h, w = frame.shape[:2]
+            new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w,h), 1)
+        frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
 
-                # Display position and rotation
-                match CAMERA_TYPE:
-                    case "axis":
-                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.3, thickness=2, rect_padding=(10,10,1000,200))
-                    case "axis_low":
-                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all)
-                    case "gopro":
-                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.5, thickness=2, rect_padding=(10,10,1100,280))
-                    case "4K":
-                        manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,400))
-    else:
-        # Handle cases where no markers are detected
-        pass
-
-    # Undistort the camera feed
-    #if visualise_calib_dist:
-    #    frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
+    if success:
+        # Display position and rotation
+        match CAMERA_TYPE:
+            case "axis":
+                manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.3, thickness=2, rect_padding=(10,10,1000,200))
+            case "axis_low":
+                manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all)
+            case "gopro":
+                manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.5, thickness=2, rect_padding=(10,10,1100,280))
+            case "4K":
+                manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,400))
     
     # Display the camera preview with position overlay
     manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame)  # Ensure this function exists
