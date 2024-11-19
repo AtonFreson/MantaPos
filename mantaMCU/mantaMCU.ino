@@ -57,7 +57,7 @@ MPU6050 accelgyro(0x69); // Make sure AD0 is high by shorting R3 to VCC
 // Variables to hold data
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
-volatile long currentCount;
+long currentCount;
 float revolutions = 0, rpm = 0, speed = 0, distance = 0;
 unsigned long imuTimestamp, tempTimestamp, pressureTimestamp;
 float ax_mss, ay_mss, az_mss;
