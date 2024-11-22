@@ -173,7 +173,7 @@ void WiFiEvent(arduino_event_t *event) {
         case ARDUINO_EVENT_ETH_START:
             SerialW.println("Ethernet Started");
             // Set the hostname for the ESP32
-            ETH.setHostname("esp32-ethernet");
+            ETH.setHostname("esp32-ethernet"); 
             break;
         case ARDUINO_EVENT_ETH_CONNECTED:
             SerialW.println("Ethernet Connected");

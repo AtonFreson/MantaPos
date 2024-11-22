@@ -139,6 +139,8 @@ void buildPTPHeader(byte messageType) {
 }
 
 void sendDelayReq() {
+    unsigned long tempSendPacket = millis();
+
     if (!ethernetConnected || !udpInitialized) {
         Serial.println("Network not ready for DELAY_REQ");
         return;
@@ -163,7 +165,7 @@ void sendDelayReq() {
     }
     UdpEvent.write(ptpMsgBuffer, 44);
     if (UdpEvent.endPacket()) {
-        lastPacketSent = millis();
+        lastPacketSent = tempSendPacket;
         sequenceId++;
     } else {
         Serial.println("End packet failed");
@@ -175,12 +177,18 @@ void handleSyncMessage(byte *buffer) {
     if (recvSequence <= lastRecvSequence) return;
     
     lastRecvSequence = recvSequence;
-    t1 = extractTimestamp(buffer, 34);
     t2 = getCurrentTimeInNanos();
 }
 
 void handleFollowUpMessage(byte *buffer) {
     t1 = extractTimestamp(buffer, 34);
+    
+    // Check if RTC is not initialized or time difference is significant
+    if (!rtcInitialized || abs((int64_t)(t1 - getCurrentTimeInNanos())) > 1000000000ULL) {
+        rtc.setEpoch(t1 / 1000000000ULL, false); // Set RTC time in seconds
+        rtcInitialized = true;
+    }
+
     calculateOffsetAndDelay();
 }
 
@@ -202,15 +210,17 @@ void processPTPGeneralMessage(byte *buffer, int size) {
 
 void calculateOffsetAndDelay() {
     if (t1 && t2 && t3 && t4) {
-        int64_t master_to_slave = t2 - t1;
-        int64_t slave_to_master = t3 - t4;
+        int64_t master_to_slave = (int64_t)(t2 - t1);
+        int64_t slave_to_master = (int64_t)(t3 - t4);
 
         offset = (master_to_slave + slave_to_master) / 2;
         roundTripDelay = (master_to_slave - slave_to_master) / 2;
 
-        Serial.printf("\nt1: %llu, t2: %llu, t3: %llu, t4: %llu\n", t1, t2, t3, t4); 
+        Serial.printf("\nt1: %llu, t2: %llu, t3: %llu, t4: %llu\n", t1, t2, t3, t4);
+        Serial.printf("Master to Slave: %lld, Slave to Master: %lld\n", master_to_slave, slave_to_master);
         Serial.printf("Offset: %lld ns\n", offset);
-        Serial.printf("Delay: %llu ns\n", roundTripDelay);
+        Serial.printf("Delay: %lld ns\n", roundTripDelay);
+        
         adjustLocalClock(offset);
         t1 = t2 = t3 = t4 = 0;
     }
@@ -218,10 +228,18 @@ void calculateOffsetAndDelay() {
 
 void adjustLocalClock(int64_t offset) {
     if (!rtcInitialized) return;
-    RTCDateTime now = rtc.getDateTime();
-    uint64_t currentTime = now.unixtime * 1000000000ULL;
-    uint64_t adjustedTime = currentTime + offset;
-    rtc.setDateTime(adjustedTime / 1000000000ULL);
+    
+    if (abs(offset) > 1000000000ULL) { // Offset greater than 1 second
+        uint64_t correctedTime = t2 - offset;
+        rtc.setEpoch(correctedTime / 1000000000ULL, false);
+    } else {
+        // For smaller offsets, apply gradual correction if desired
+
+        /*RTCDateTime now = rtc.getDateTime();
+        uint64_t currentTime = now.unixtime * 1000000000ULL;
+        uint64_t adjustedTime = currentTime + offset;
+        rtc.setDateTime(adjustedTime / 1000000000ULL);*/
+    }
 }
 
 uint64_t extractTimestamp(byte *buffer, int startIndex) {
@@ -236,10 +254,10 @@ uint64_t extractTimestamp(byte *buffer, int startIndex) {
     return (seconds * 1000000000ULL) + nanoseconds;
 }
 
+// Use unixtime() to get the current time from RTC in seconds since 1970
 uint64_t getCurrentTimeInNanos() {
-    if (!rtcInitialized) return 0;
-    RTCDateTime now = rtc.getDateTime();
-    return (uint64_t)now.unixtime * 1000000000ULL;
+    DateTime now = RTClib::now();
+    return (uint64_t)now.unixtime() * 1000000000ULL; // Convert to nanoseconds (x9)
 }
 
 void setup() {
@@ -252,9 +270,8 @@ void setup() {
     ETH.config(local_ip, gateway, subnet, dns);
 
     Wire.begin();
-    rtc.begin();
-    rtcInitialized = rtc.isReady();
-    Serial.printf("RTC initialized: %d\n", rtcInitialized);
+    //rtc.begin();
+    rtc.setClockMode(false); // Set 24h format
 }
 
 void loop() {

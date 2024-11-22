@@ -10,10 +10,14 @@
 #define INDEX_PIN_Z_POS 35    // Z
 #define INDEX_PIN_Z_NEG 36    // Z-
  
-// Configuration
+// Encoder configuration
+#define MMPP 0.105  // mm per pulse. For linear sensors. Overwrites rotational measurements (e.g. PPR), set to 0 to use PPR.
+
 #define PPR 400  // Pulses Per Revolution
-#define COUNTS_PER_REV (PPR * 4)  // In quadrature mode
 #define WHEEL_DIAMETER_MM 82.53
+
+#define MMPP_QUAD (MMPP * 4)  // In quadrature mode
+#define COUNTS_PER_REV (PPR * 4)  // In quadrature mode
 #define DISTANCE_PER_REV (WHEEL_DIAMETER_MM * PI / 1000.0)  // meters per revolution
 #define DISTANCE_PER_COUNT (DISTANCE_PER_REV / COUNTS_PER_REV)
 
@@ -178,9 +182,14 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(INDEX_PIN_Z_POS), indexISR, RISING);
     
     delay(1000); // Wait a bit for serial connection to be established
-    SerialW.println("\nSCA50-400 Encoder Test");
-    SerialW.println("PPR: 400");
-    SerialW.println("Resolution: ±0.10mm\n");
+    if (MMPP_QUAD) {
+        SerialW.println("\nWDS-7500-P115 Wire Sensor Test");
+        SerialW.println("Resolution: ±0.03mm & ±0.02% FSO\n");
+    } else {
+        SerialW.println("\nSCA50-400 Encoder Test");
+        SerialW.println("PPR: 400");
+        SerialW.println("Resolution: ±0.10mm\n");
+    }
 
     // Initialize Ethernet and register event handler
     WiFi.onEvent(WiFiEvent);
@@ -207,8 +216,9 @@ void setup() {
 void loop() {
     // Check if a reset occurred and print the message
     if (resetOccurred) {
-        SerialW.println("Encoder count reset.");
+        Serial.println("Encoder count reset.");
         resetOccurred = false; // Clear the reset occurred flag
+        resetCommandReceived = true;
     }
 
     unsigned long currentTime = millis();
@@ -245,12 +255,17 @@ void loop() {
 
         if (currentCount != lastEncoderCount && timeDelta > 0) {
             float revolutions = (float)currentCount / COUNTS_PER_REV;
-            float distance = currentCount * DISTANCE_PER_COUNT;
+            if (!MMPP_QUAD) {
+                float dist_count = DISTANCE_PER_COUNT;
+            } else {
+                float dist_count = MMPP_QUAD;
+            }
+            float distance = currentCount * dist_count;
 
             // Calculate speed
             float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
             float rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
-            float speed_m_per_s = countsPerSec * DISTANCE_PER_COUNT;
+            float speed_m_per_s = countsPerSec * dist_count;
 
             char buffer[150];
             snprintf(buffer, sizeof(buffer), 
