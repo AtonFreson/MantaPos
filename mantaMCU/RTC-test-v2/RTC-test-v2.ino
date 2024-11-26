@@ -50,11 +50,7 @@ unsigned long lastPacketSent = 0;
 unsigned long lastPacketReceived = 0;
 const unsigned long NETWORK_TIMEOUT = 30000; // 30 seconds
 
-uint32_t lastSyncTime = 0;          // Store the last sync time in unix format
-uint32_t storedSyncTime = 0;        // Store the last sync time read from EEPROM
-
-unsigned long rtcUpdateStartTime = 0; // Track when RTC updates started
-bool rtcUpdateExpired = false;        // Flag to indicate if RTC update period has expired
+uint64_t timeOffsetMicros = 0; // Global time offset in microseconds
 
 void WiFiEvent(arduino_event_t *event) {
     switch (event->event_id) {
@@ -190,14 +186,6 @@ void handleSyncMessage(byte *buffer) {
 void handleFollowUpMessage(byte *buffer) {
     t1 = extractTimestamp(buffer, 34);
 
-    if (!rtcUpdateExpired) {
-        // Check if RTC is not initialized or time difference is significant
-        if (!rtcInitialized || abs((int64_t)(t1 - getCurrentTimeInNanos())) > 1000000000ULL) {
-            rtc.setEpoch(t1 / 1000000000ULL, false); // Set RTC time in seconds
-            rtcInitialized = true;
-        }
-    }
-    
     calculateOffsetAndDelay();
 }
 
@@ -226,66 +214,47 @@ void calculateOffsetAndDelay() {
         roundTripDelay = (master_to_slave - slave_to_master) / 2;
 
         Serial.printf("\nt1: %llu, t2: %llu, t3: %llu, t4: %llu\n", t1, t2, t3, t4);
-        Serial.printf("Master to Slave: %lld, Slave to Master: %lld\n", master_to_slave, slave_to_master);
+        Serial.printf("Master to Slave: %lld ns, Slave to Master: %lld ns\n", master_to_slave, slave_to_master);
         Serial.printf("Offset: %lld ns\n", offset);
         Serial.printf("Delay: %lld ns\n", roundTripDelay);
-        
-        /*if (!rtcUpdateExpired) {
-            // Check if RTC is not initialized or time difference is significant
-            //if (!rtcInitialized || abs((int64_t)(t1 - getCurrentTimeInNanos())) > 1000000000ULL) {
-            Serial.println(abs(offset) > 1000000000ULL);
-            if (!rtcInitialized || abs(offset) > 1000000000ULL) {
-                int64_t add_or_sub = (offset > 0) ? -1 : 1;
-                rtc.setEpoch(t1 / 1000000000ULL + add_or_sub, false); // Set RTC time in seconds, rounded to nearest second
-                rtcInitialized = true;
-            } else {
-                adjustLocalClock(offset);
-            }
-        }*/
 
         adjustLocalClock(offset);
+
         t1 = t2 = t3 = t4 = 0;
     }
 }
 
 void adjustLocalClock(int64_t offset) {
-    if (rtcUpdateExpired || !rtcInitialized) return;
+    // Convert offset from nanoseconds to microseconds
+    int64_t offsetMicros = offset / 1000LL;
 
-    // Start RTC update timer
-    if (rtcUpdateStartTime == 0) {
-        rtcUpdateStartTime = millis();
+    // Adjust the time offset
+    timeOffsetMicros += offsetMicros;
+
+    Serial.printf("Adjusted time offset: %lld µs\n", timeOffsetMicros);
+
+    // If the offset is small enough, update the RTC
+    if (abs(offsetMicros) < 500000) { // Offset less than 0.5 seconds
+        setRTCAtNextSecond();
     }
+}
 
-    // Only update RTC for 30 seconds
-    if (millis() - rtcUpdateStartTime < 30000UL) {
-        // Proceed to adjust RTC as before
-        //if (abs(offset) > 1000000000ULL) { // Offset greater than 1 second
+void setRTCAtNextSecond() {
+    uint64_t currentTimeNanos = getCurrentTimeInNanos();
+    uint64_t nextSecondNanos = ((currentTimeNanos / 1000000000ULL) + 1) * 1000000000ULL;
 
-        uint64_t correctedTime = t2 - offset;
-        //lastSyncTime = (correctedTime + 500000000ULL) / 1000000000ULL; // Round to nearest second
-        lastSyncTime = correctedTime / 1000000000ULL;
-        rtc.setEpoch(lastSyncTime, false);
+    uint64_t waitTimeMicros = (nextSecondNanos - currentTimeNanos) / 1000ULL;
 
-        //} else {
-            // For smaller offsets, apply gradual correction if desired
+    // Wait until just before the next second boundary
+    delayMicroseconds(waitTimeMicros - 500); // Adjust for code execution time
 
-            /*RTCDateTime now = rtc.getDateTime();
-            uint64_t currentTime = now.unixtime * 1000000000ULL;
-            uint64_t adjustedTime = currentTime + offset;
-            rtc.setDateTime(adjustedTime / 1000000000ULL);*/
-            // Update lastSyncTime if gradual correction is implemented
-        //}
+    // Busy-wait until we reach the exact nanosecond
+    while ((esp_timer_get_time() + timeOffsetMicros) * 1000ULL < nextSecondNanos - 1000ULL); // Wait until within 1 µs
 
-        // Save time and offset to EEPROM
-        storedSyncTime = lastSyncTime;
-        EEPROM.put(0, storedSyncTime); // Store time at address 0
-        EEPROM.put(4, offset);         // Store offset at address 4
-        EEPROM.commit();
-        Serial.println("Sync Time and Offset stored to EEPROM");
-    } else {
-        // Stop updating RTC after 2 minutes
-        rtcUpdateExpired = true;
-    }
+    // Now set the RTC to the next second
+    rtc.setEpoch(nextSecondNanos / 1000000000ULL, false);
+
+    Serial.println("RTC set at precise second boundary");
 }
 
 uint64_t extractTimestamp(byte *buffer, int startIndex) {
@@ -300,8 +269,12 @@ uint64_t extractTimestamp(byte *buffer, int startIndex) {
     return (seconds * 1000000000ULL) + nanoseconds;
 }
 
-// Use unixtime() to get the current time from RTC in seconds since 1970
 uint64_t getCurrentTimeInNanos() {
+    return (esp_timer_get_time() + timeOffsetMicros) * 1000ULL; // Convert to nanoseconds
+}
+
+// Use unixtime() to get the current time from RTC in seconds since 1970
+uint64_t getCurrentTimeRTC() {
     DateTime now = RTClib::now();
     return (uint64_t)now.unixtime() * 1000000000ULL; // Convert to nanoseconds (x9)
 }
@@ -319,20 +292,20 @@ void setup() {
     rtc.setClockMode(false); // Set 24h format
 
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
-    EEPROM.get(0, storedSyncTime); // Read the last stored sync time from EEPROM
-    EEPROM.get(4, offset); // Read the stored offset from EEPROM
+
+    // Initialize timeOffsetMicros based on RTC time and esp_timer
+    uint32_t rtcTime = getCurrentTimeRTC();
+    if (rtcTime == 0 || rtcTime == 946684800) { // Check for invalid RTC time (e.g., 0 or 2000-01-01)
+        Serial.println("RTC time invalid, setting to compile time");
+        // You can set it to a default time or skip setting
+        rtcTime = 1709459200; // 2024-01-01 00:00:00
+        rtc.setEpoch(rtcTime, false);
+    }
+
+    timeOffsetMicros = ((uint64_t)rtcTime) * 1000000ULL - esp_timer_get_time();
 }
 
 void loop() {
-    if (rtcUpdateExpired) {
-        Serial.println("RTC update period has expired, waiting for reset...");
-        Serial.printf("Final stored sync time: %u\n", storedSyncTime);
-        Serial.printf("Final stored offset: %lld\n", offset);
-        while (true) {
-            delay(1000);
-        }
-    }
-
     if (!ethernetConnected || !udpInitialized) {
         if (!ETH.linkUp()) ESP.restart();
         initializeUDP();
@@ -351,4 +324,11 @@ void loop() {
     }
 
     if (millis() - lastPacketSent > 1000) sendDelayReq();
+
+    // Periodically update RTC with the current time
+    static unsigned long lastRTCUpdate = 0;
+    if (millis() - lastRTCUpdate > 60000UL) { // Update RTC every minute
+        setRTCAtNextSecond();
+        lastRTCUpdate = millis();
+    }
 }
