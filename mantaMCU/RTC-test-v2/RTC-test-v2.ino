@@ -276,7 +276,7 @@ uint64_t getCurrentTimeInNanos() {
 // Use unixtime() to get the current time from RTC in seconds since 1970
 uint64_t getCurrentTimeRTC() {
     DateTime now = RTClib::now();
-    return (uint64_t)now.unixtime() * 1000000000ULL; // Convert to nanoseconds (x9)
+    return (uint64_t)now.unixtime() * 1000000ULL; // Convert to microseconds
 }
 
 void setup() {
@@ -294,15 +294,14 @@ void setup() {
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
 
     // Initialize timeOffsetMicros based on RTC time and esp_timer
-    uint32_t rtcTime = getCurrentTimeRTC();
-    if (rtcTime == 0 || rtcTime == 946684800) { // Check for invalid RTC time (e.g., 0 or 2000-01-01)
-        Serial.println("RTC time invalid, setting to compile time");
-        // You can set it to a default time or skip setting
-        rtcTime = 1709459200; // 2024-01-01 00:00:00
-        rtc.setEpoch(rtcTime, false);
+    uint64_t rtcTime = getCurrentTimeRTC(); // Use uint64_t for rtcTime
+    if (rtcTime == 0 || rtcTime <= 1709459200000000ULL) { // Adjusted for microseconds
+        Serial.println("RTC time invalid, setting to a default time");
+        rtcTime = 1709459200000000ULL; // 2024-01-01 00:00:00 in microseconds
+        rtc.setEpoch(rtcTime / 1000000ULL, false);
     }
 
-    timeOffsetMicros = ((uint64_t)rtcTime) * 1000000ULL - esp_timer_get_time();
+    timeOffsetMicros = rtcTime - esp_timer_get_time();
 }
 
 void loop() {

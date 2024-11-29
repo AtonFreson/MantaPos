@@ -43,6 +43,9 @@ int64_t storedOffset = 0;    // Variable to store the offset read from EEPROM
 unsigned long lastPrintTime = 0;
 const unsigned long PRINT_INTERVAL = 5000; // 5 seconds in milliseconds
 
+bool readyToPrint = false;
+int64_t lastCalculatedDrift = 0;
+
 void WiFiEvent(arduino_event_t *event) {
     switch (event->event_id) {
         case ARDUINO_EVENT_ETH_START:
@@ -114,56 +117,50 @@ uint64_t extractTimestamp(byte *buffer, int startIndex) {
     return (seconds * 1000000000ULL) + nanoseconds;
 }
 
+void printDriftInfo() {
+    // Get current time in seconds
+    uint32_t currentTime = t2 / 1000000000ULL;
+    uint32_t timeSinceSync = currentTime - storedSyncTime;
+
+    // Calculate time components
+    uint32_t days = timeSinceSync / 86400;
+    uint32_t hours = (timeSinceSync % 86400) / 3600;
+    uint32_t minutes = (timeSinceSync % 3600) / 60;
+    uint32_t seconds = timeSinceSync % 60;
+
+    // Calculate drift in milliseconds with rounding
+    int64_t drift_ms;
+    if (lastCalculatedDrift >= 0) {
+        drift_ms = (lastCalculatedDrift + 500000) / 1000000LL;
+    } else {
+        drift_ms = (lastCalculatedDrift - 500000) / 1000000LL;
+    }
+
+    // Calculate drift in ppm
+    double drift_ppm = 0.0;
+    if (timeSinceSync > 0) {
+        drift_ppm = ((double)lastCalculatedDrift / (double)(timeSinceSync * 1000000000ULL)) * 1e6;
+    }
+
+    // Print time since sync
+    Serial.printf("Time since last sync: %u days, %u hours, %u minutes, %u seconds\n", 
+                 days, hours, minutes, seconds);
+
+    // Print drift with ppm
+    if (drift_ms > 0) {
+        Serial.printf("ESP32 is slow by %lld ms (%.6f ppm)\n", drift_ms, drift_ppm);
+    } else if (drift_ms < 0) {
+        Serial.printf("ESP32 is fast by %lld ms (%.6f ppm)\n", -drift_ms, -drift_ppm);
+    } else {
+        Serial.println("ESP32 clock is synchronized to <1 ms with master");
+    }
+}
+
 void handleFollowUpMessage(byte *buffer, int64_t drift_start_offset) {
     t1 = extractTimestamp(buffer, 34);
     if (t2 != 0) {
-        drift = (int64_t)(t1 - t2);
-        drift += drift_start_offset; // Offset drift in case of initial drift.
-
-        // Only print if enough time has elapsed
-        unsigned long currentMillis = millis();
-        if (currentMillis - lastPrintTime >= PRINT_INTERVAL) {
-            lastPrintTime = currentMillis;
-
-            // Get current time in seconds
-            uint32_t currentTime = t2 / 1000000000ULL;
-
-            // Calculate time since last sync
-            uint32_t timeSinceSync = currentTime - storedSyncTime;
-
-            // Convert timeSinceSync to days, hours, minutes, seconds
-            uint32_t days = timeSinceSync / 86400;
-            uint32_t hours = (timeSinceSync % 86400) / 3600;
-            uint32_t minutes = (timeSinceSync % 3600) / 60;
-            uint32_t seconds = timeSinceSync % 60;
-
-            // Calculate drift in milliseconds with rounding
-            int64_t drift_ms;
-            if (drift >= 0) {
-                drift_ms = (drift + 500000) / 1000000LL;
-            } else {
-                drift_ms = (drift - 500000) / 1000000LL;
-            }
-
-            // Calculate drift in ppm
-            double drift_ppm = 0.0;
-            if (timeSinceSync > 0) {
-                drift_ppm = ((double)drift / (double)(timeSinceSync * 1000000000ULL)) * 1e6;
-            }
-
-            // Print time since sync
-            Serial.printf("Time since last sync: %u days, %u hours, %u minutes, %u seconds\n", 
-                         days, hours, minutes, seconds);
-
-            // Print drift with ppm
-            if (drift_ms > 0) {
-                Serial.printf("ESP32 is slow by %lld ms (%.6f ppm)\n", drift_ms, drift_ppm);
-            } else if (drift_ms < 0) {
-                Serial.printf("ESP32 is fast by %lld ms (%.6f ppm)\n", -drift_ms, drift_ppm);
-            } else {
-                Serial.println("ESP32 clock is synchronized to <1 ms with master");
-            }
-        }
+        lastCalculatedDrift = (int64_t)(t1 - t2) + drift_start_offset;
+        readyToPrint = true;
         t1 = t2 = 0;
     }
 }
@@ -210,5 +207,17 @@ void loop() {
     if (packetSize) {
         UdpGeneral.read(ptpMsgBuffer, PTP_MSG_SIZE);
         processPTPGeneralMessage(ptpMsgBuffer, packetSize, storedOffset);
+    }
+
+    // Handle printing with delay
+    unsigned long currentMillis = millis();
+    if (currentMillis - lastPrintTime >= PRINT_INTERVAL) {
+        lastPrintTime = currentMillis;
+        if (readyToPrint) {
+            printDriftInfo();
+            readyToPrint = false;
+        } else {
+            Serial.println("Waiting for data packets...");
+        }
     }
 }

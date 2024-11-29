@@ -109,6 +109,7 @@ try:
                     cv2.imshow("Sensor Data", img)
                 except json.JSONDecodeError as e:
                     print(f"Failed to parse JSON data: {e}")
+                    print(f"Received data:\n{data}")
                 received_data = None
         
         # Check for window close

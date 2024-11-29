@@ -255,9 +255,8 @@ void loop() {
 
         if (currentCount != lastEncoderCount && timeDelta > 0) {
             float revolutions = (float)currentCount / COUNTS_PER_REV;
-            if (!MMPP_QUAD) {
-                float dist_count = DISTANCE_PER_COUNT;
-            } else {
+            float dist_count = DISTANCE_PER_COUNT;
+            if (MMPP_QUAD) {
                 float dist_count = MMPP_QUAD;
             }
             float distance = currentCount * dist_count;
