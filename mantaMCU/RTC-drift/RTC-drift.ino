@@ -206,7 +206,7 @@ void loop() {
     int packetSize = UdpGeneral.parsePacket();
     if (packetSize) {
         UdpGeneral.read(ptpMsgBuffer, PTP_MSG_SIZE);
-        processPTPGeneralMessage(ptpMsgBuffer, packetSize, storedOffset+33000000ULL); // OBS: I added an offset.
+        processPTPGeneralMessage(ptpMsgBuffer, packetSize, storedOffset); // +33000000ULL second clock
     }
 
     // Handle printing with delay
