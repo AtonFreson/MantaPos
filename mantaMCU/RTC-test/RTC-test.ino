@@ -227,21 +227,8 @@ void calculateOffsetAndDelay() {
 
         Serial.printf("\nt1: %llu, t2: %llu, t3: %llu, t4: %llu\n", t1, t2, t3, t4);
         Serial.printf("Master to Slave: %lld, Slave to Master: %lld\n", master_to_slave, slave_to_master);
-        Serial.printf("Offset: %lld ns\n", offset);
+        Serial.printf("Offset: %lld ns (%f seconds)\n", offset, (double)offset / 1000000000.0);
         Serial.printf("Delay: %lld ns\n", roundTripDelay);
-        
-        /*if (!rtcUpdateExpired) {
-            // Check if RTC is not initialized or time difference is significant
-            //if (!rtcInitialized || abs((int64_t)(t1 - getCurrentTimeInNanos())) > 1000000000ULL) {
-            Serial.println(abs(offset) > 1000000000ULL);
-            if (!rtcInitialized || abs(offset) > 1000000000ULL) {
-                int64_t add_or_sub = (offset > 0) ? -1 : 1;
-                rtc.setEpoch(t1 / 1000000000ULL + add_or_sub, false); // Set RTC time in seconds, rounded to nearest second
-                rtcInitialized = true;
-            } else {
-                adjustLocalClock(offset);
-            }
-        }*/
 
         adjustLocalClock(offset);
         t1 = t2 = t3 = t4 = 0;
@@ -258,24 +245,10 @@ void adjustLocalClock(int64_t offset) {
 
     // Only update RTC for 30 seconds
     if (millis() - rtcUpdateStartTime < 30000UL) {
-        // Proceed to adjust RTC as before
-        //if (abs(offset) > 1000000000ULL) { // Offset greater than 1 second
-
         uint64_t correctedTime = t2 - offset;
-        //lastSyncTime = (correctedTime + 500000000ULL) / 1000000000ULL; // Round to nearest second
         lastSyncTime = correctedTime / 1000000000ULL;
         rtc.setEpoch(lastSyncTime, false);
-
-        //} else {
-            // For smaller offsets, apply gradual correction if desired
-
-            /*RTCDateTime now = rtc.getDateTime();
-            uint64_t currentTime = now.unixtime * 1000000000ULL;
-            uint64_t adjustedTime = currentTime + offset;
-            rtc.setDateTime(adjustedTime / 1000000000ULL);*/
-            // Update lastSyncTime if gradual correction is implemented
-        //}
-
+        
         // Save time and offset to EEPROM
         storedSyncTime = lastSyncTime;
         EEPROM.put(0, storedSyncTime); // Store time at address 0
@@ -317,6 +290,8 @@ void setup() {
 
     Wire.begin();
     rtc.setClockMode(false); // Set 24h format
+    
+    rtc.setEpoch(1733110618); // Set rtc to current time, Fri Nov 29 2024 20:03:38 UTC
 
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
     EEPROM.get(0, storedSyncTime); // Read the last stored sync time from EEPROM
