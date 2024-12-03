@@ -6,8 +6,9 @@
 #include <EEPROM.h> // Include EEPROM library
 #include "esp_timer.h"
 
+#define RTC_ISR_PIN 2
+
 DS3231 rtc;
-bool rtcInitialized = false;
 
 // Network configuration
 IPAddress local_ip(169, 254, 178, 100);  
@@ -51,11 +52,19 @@ unsigned long lastPacketSent = 0;
 unsigned long lastPacketReceived = 0;
 const unsigned long NETWORK_TIMEOUT = 30000; // 30 seconds
 
-uint32_t lastSyncTime = 0;          // Store the last sync time in unix format
-uint32_t storedSyncTime = 0;        // Store the last sync time read from EEPROM
+uint32_t storedSyncTime = 0;        // Variable to store the last sync time to EEPROM
 
 unsigned long rtcUpdateStartTime = 0; // Track when RTC updates started
 bool rtcUpdateExpired = false;        // Flag to indicate if RTC update period has expired
+volatile uint64_t localSecondOffsetNs = esp_timer_get_time() * 1000ULL;; // Offset in nanoseconds from the last full second
+uint64_t shiftNs = esp_timer_get_time() * 1000ULL;
+
+// Clock interrupt frequency
+// 0x00 = 1 Hz
+// 0x08 = 1.024 kHz
+// 0x10 = 4.096 kHz
+// 0x18 = 8.192 kHz (Default if frequency byte is out of range);
+byte itr_freq = 0x00;
 
 esp_timer_handle_t rtc_update_timer = NULL;
 
@@ -127,6 +136,10 @@ void initializeUDP() {
     }
 }
 
+void rtcSecondInterrupt () {
+    localSecondOffsetNs = esp_timer_get_time() * 1000ULL;
+}
+
 void sendTestPacket() {
     if (!udpInitialized) return;
     
@@ -196,88 +209,6 @@ void handleSyncMessage(byte *buffer) {
 
 void handleFollowUpMessage(byte *buffer) {
     t1 = extractTimestamp(buffer, 34);
-
-    if (t2 == 0) {
-        Serial.println("t2 is not set, cannot calculate offset");
-        return;
-    }
-
-    calculateOffsetAndDelay();
-
-    // Schedule RTC update at the next full second of the master clock
-    uint64_t masterTimeNs = t1;
-    uint64_t nextFullSecondNs = ((masterTimeNs / 1000000000ULL) + 1) * 1000000000ULL;
-    int64_t delayToNextSecondNs = nextFullSecondNs - (masterTimeNs + offset);
-
-    if (delayToNextSecondNs < 0) {
-        Serial.println("Negative delay, cannot schedule RTC update");
-        return;
-    }
-
-    uint64_t delayUs = delayToNextSecondNs / 1000ULL;
-
-    uint64_t newRtcTime = nextFullSecondNs / 1000000000ULL;
-
-    scheduleRtcUpdate(delayUs, newRtcTime);
-}
-
-void scheduleRtcUpdate(uint64_t delayUs, uint64_t newRtcTime) {
-    if (rtc_update_timer != NULL) {
-        // Timer already exists, delete it
-        esp_timer_delete(rtc_update_timer);
-        rtc_update_timer = NULL;
-    }
-
-    RtcUpdateArg* arg = (RtcUpdateArg*)malloc(sizeof(RtcUpdateArg));
-    if (arg == NULL) {
-        Serial.println("Failed to allocate memory for timer arg");
-        return;
-    }
-    arg->newRtcTime = newRtcTime;
-
-    esp_timer_create_args_t timer_args = {
-        .callback = &rtcUpdateCallback,
-        .arg = (void*)arg,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "rtc_update_timer"
-    };
-
-    esp_err_t err = esp_timer_create(&timer_args, &rtc_update_timer);
-    if (err != ESP_OK) {
-        Serial.printf("Failed to create timer: %s\n", esp_err_to_name(err));
-        free(arg);
-        return;
-    }
-
-    err = esp_timer_start_once(rtc_update_timer, delayUs);
-    if (err != ESP_OK) {
-        Serial.printf("Failed to start timer: %s\n", esp_err_to_name(err));
-        esp_timer_delete(rtc_update_timer);
-        rtc_update_timer = NULL;
-        free(arg);
-    } else {
-        Serial.printf("RTC update scheduled in %llu us to set time to %llu\n", delayUs, newRtcTime);
-    }
-}
-
-void rtcUpdateCallback(void* arg) {
-    RtcUpdateArg* rtcArg = (RtcUpdateArg*)arg;
-    uint64_t newRtcTime = rtcArg->newRtcTime;
-
-    // Set the DS3231 RTC to newRtcTime
-    rtc.setEpoch(newRtcTime, false);
-
-    rtcInitialized = true;
-    Serial.printf("RTC updated to %llu\n", newRtcTime);
-
-    // Delete the timer
-    if (rtc_update_timer != NULL) {
-        esp_timer_delete(rtc_update_timer);
-        rtc_update_timer = NULL;
-    }
-
-    // Free the arg
-    free(rtcArg);
 }
 
 void handleDelayRespMessage(byte *buffer) {
@@ -315,7 +246,7 @@ void calculateOffsetAndDelay() {
 }
 
 void adjustLocalClock(int64_t offset) {
-    if (rtcUpdateExpired || !rtcInitialized) return;
+    if (rtcUpdateExpired) return;
 
     // Start RTC update timer
     if (rtcUpdateStartTime == 0) {
@@ -323,21 +254,115 @@ void adjustLocalClock(int64_t offset) {
     }
 
     // Only update RTC for 30 seconds
-    if (millis() - rtcUpdateStartTime < 30000UL) {
-        uint64_t correctedTime = t2 - offset;
-        lastSyncTime = correctedTime / 1000000000ULL;
-        rtc.setEpoch(lastSyncTime, false);
+    if (millis() - rtcUpdateStartTime < 30000) {
+        // Calculate the corrected time
+        /*uint64_t correctedTimeNs = t4;
+        //uint64_t correctedTimeNs = t2 - offset;
+
+        // Calculate the next full second in corrected time
+        uint64_t nextFullSecondNs = ((correctedTimeNs / 1000000000ULL) + 1) * 1000000000ULL;
+
+        // Calculate delay until the next full second in corrected time
+        int64_t delayToNextSecondNs = nextFullSecondNs - t4;//t2;
+        //int64_t delayToNextSecondNs = nextFullSecondNs - correctedTimeNs;
+
+        if (delayToNextSecondNs < 0) {
+            uint64_t offsetSeconds = -delayToNextSecondNs / 1000000000ULL + 1ULL;
+            Serial.printf("Negative offset, adding %llu seconds\n", offsetSeconds);
+            delayToNextSecondNs += offsetSeconds * 1000000000ULL;
+        } else {
+            uint64_t offsetSeconds = delayToNextSecondNs / 1000000000ULL;
+            Serial.printf("Positive offset, removing %llu seconds\n", offsetSeconds);
+            delayToNextSecondNs -= offsetSeconds * 1000000000ULL;
+        }
+
+        uint64_t delayUs = delayToNextSecondNs / 1000ULL;
+
+        uint64_t newRtcTime = nextFullSecondNs / 1000000000ULL;
+
+        scheduleRtcUpdate(delayUs, newRtcTime);*/
+
+
+
+        //uint64_t correctedTimeNs = t2 - offset;
+        uint64_t correctedTimeNs = t4 - offset/2;
+
+        uint64_t nextFullSecondNs = ((correctedTimeNs / 1000000000ULL) + 1ULL) * 1000000000ULL;
+        
+        uint64_t delayToNextSecondNs = nextFullSecondNs - correctedTimeNs;
+        uint64_t delayUs = delayToNextSecondNs / 1000ULL;
+        uint64_t newRtcTime = nextFullSecondNs / 1000000000ULL;
+
+        scheduleRtcUpdate(delayUs, newRtcTime);
 
         // Save time and offset to EEPROM
-        storedSyncTime = lastSyncTime;
+        storedSyncTime = newRtcTime;
         EEPROM.put(0, storedSyncTime); // Store time at address 0
-        EEPROM.put(4, offset);         // Store offset at address 4
+        EEPROM.put(4, 0ULL); // Store offset at address 4
         EEPROM.commit();
-        Serial.println("Sync Time and Offset stored to EEPROM");
+        //Serial.println("Sync Time and Offset stored to EEPROM");
     } else {
         // Stop updating RTC after 30 seconds
         rtcUpdateExpired = true;
     }
+}
+
+void scheduleRtcUpdate(uint64_t delayUs, uint64_t newRtcTime) {
+    if (rtc_update_timer != NULL) {
+        // Timer already exists, delete it
+        esp_timer_delete(rtc_update_timer);
+        rtc_update_timer = NULL;
+    }
+
+    RtcUpdateArg* arg = (RtcUpdateArg*)malloc(sizeof(RtcUpdateArg));
+    if (arg == NULL) {
+        Serial.println("Failed to allocate memory for timer arg");
+        return;
+    }
+    arg->newRtcTime = newRtcTime;
+
+    esp_timer_create_args_t timer_args = {
+        .callback = &rtcUpdateCallback,
+        .arg = (void*)arg,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "rtc_update_timer"
+    };
+
+    esp_err_t err = esp_timer_create(&timer_args, &rtc_update_timer);
+    if (err != ESP_OK) {
+        Serial.printf("Failed to create timer: %s\n", esp_err_to_name(err));
+        free(arg);
+        return;
+    }
+
+    err = esp_timer_start_once(rtc_update_timer, delayUs);
+    if (err != ESP_OK) {
+        Serial.printf("Failed to start timer: %s\n", esp_err_to_name(err));
+        esp_timer_delete(rtc_update_timer);
+        rtc_update_timer = NULL;
+        free(arg);
+    } else {
+        Serial.printf("RTC update scheduled in %llu us to set time to %llu... ", delayUs, newRtcTime);
+    }
+}
+
+void rtcUpdateCallback(void* arg) {
+    RtcUpdateArg* rtcArg = (RtcUpdateArg*)arg;
+    uint64_t newRtcTime = rtcArg->newRtcTime;
+
+    // Set the DS3231 RTC
+    rtc.setEpoch(newRtcTime, false);
+
+    Serial.printf("RTC updated to %llu, locally timestamped at %llu ns\n", newRtcTime, localSecondOffsetNs);
+
+    // Delete the timer
+    if (rtc_update_timer != NULL) {
+        esp_timer_delete(rtc_update_timer);
+        rtc_update_timer = NULL;
+    }
+
+    // Free the arg
+    free(rtcArg);
 }
 
 uint64_t extractTimestamp(byte *buffer, int startIndex) {
@@ -354,7 +379,14 @@ uint64_t extractTimestamp(byte *buffer, int startIndex) {
 
 // Use esp_timer_get_time() to get the current time from ESP32 in microseconds since boot
 uint64_t getCurrentTimeInNanos() {
-    return esp_timer_get_time() * 1000ULL; // Convert microseconds to nanoseconds
+    // Get current time from the RTC
+    DateTime now = RTClib::now();
+    noInterrupts();
+    shiftNs = esp_timer_get_time() * 1000ULL - localSecondOffsetNs;
+    interrupts();
+    // Serial.printf("Local offset: %llu ns. Local RTC set time: %llu ns\n", localOffset, localRTCSetTimeNs);
+
+    return (((uint64_t)now.unixtime() * 1000000000ULL) + shiftNs); // Convert to nanoseconds (x9)
 }
 
 void setup() {
@@ -368,6 +400,11 @@ void setup() {
 
     Wire.begin();
     rtc.setClockMode(false); // Set 24h format
+    rtc.enableOscillator(true, false, itr_freq); // enable the 1 Hz output on interrupt pin
+
+    // set up to handle interrupt from 1 Hz pin
+    pinMode (RTC_ISR_PIN, INPUT_PULLUP);
+    attachInterrupt (digitalPinToInterrupt (RTC_ISR_PIN), rtcSecondInterrupt, RISING);
 
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
     EEPROM.get(0, storedSyncTime); // Read the last stored sync time from EEPROM
@@ -377,10 +414,12 @@ void setup() {
 void loop() {
     if (rtcUpdateExpired) {
         Serial.println("RTC update period has expired, waiting for reset...");
+        EEPROM.get(0, storedSyncTime);
+        EEPROM.get(4, offset);
         Serial.printf("Final stored sync time: %u\n", storedSyncTime);
         Serial.printf("Final stored offset: %lld\n", offset);
         while (true) {
-            delay(1000);
+            // Do nothing
         }
     }
 
@@ -401,5 +440,5 @@ void loop() {
         processPTPGeneralMessage(ptpMsgBuffer, packetSize);
     }
 
-    if (millis() - lastPacketSent > 1000) sendDelayReq();
+    if (millis() - lastPacketSent > 2000) sendDelayReq();
 }
