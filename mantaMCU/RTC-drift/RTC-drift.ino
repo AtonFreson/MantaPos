@@ -5,6 +5,8 @@
 #include <DS3231.h>
 #include <EEPROM.h> // Include EEPROM library
 
+#define RTC_ISR_PIN 2
+
 // Create DS3231 object
 DS3231 rtc;
 
@@ -80,13 +82,23 @@ void WiFiEvent(arduino_event_t *event) {
 void initializeUDP() {
     bool success = true;
 
-    if (!UdpEvent.beginMulticast(ptpMulticastIP, localEventPort)) {
-        Serial.println("Event UDP multicast begin failed");
+    if (!UdpEvent.begin(localEventPort)) {
+        Serial.println("Event UDP initialization failed");
+        success = false;
+    }
+    
+    if (!UdpGeneral.begin(localGeneralPort)) {
+        Serial.println("General UDP initialization failed");
         success = false;
     }
 
+    if (!UdpEvent.beginMulticast(ptpMulticastIP, localEventPort)) {
+        Serial.println("Event multicast join failed");
+        success = false;
+    }
+    
     if (!UdpGeneral.beginMulticast(ptpMulticastIP, localGeneralPort)) {
-        Serial.println("General UDP multicast begin failed");
+        Serial.println("General multicast join failed");
         success = false;
     }
 
@@ -99,10 +111,15 @@ void initializeUDP() {
     }
 }
 
+// Use esp_timer_get_time() to get the current time from ESP32 in microseconds since boot
 uint64_t getCurrentTimeInNanos() {
-    //DateTime now = rtc.now();
+    // Get current time from the RTC
     DateTime now = RTClib::now();
-    return (uint64_t)now.unixtime() * 1000000000ULL; // Convert to nanoseconds (x9)
+    noInterrupts();
+    shiftNs = esp_timer_get_time() * 1000ULL - localSecondOffsetNs;
+    interrupts();
+
+    return (((uint64_t)now.unixtime() * 1000000000ULL) + shiftNs); // Convert to nanoseconds (x9)
 }
 
 uint64_t extractTimestamp(byte *buffer, int startIndex) {
@@ -156,6 +173,14 @@ void printDriftInfo() {
     }
 }
 
+void handleSyncMessage(byte *buffer) {
+    uint16_t recvSequence = (buffer[30] << 8) | buffer[31];
+    if (recvSequence <= lastRecvSequence) return;
+    t2 = getCurrentTimeInNanos();
+
+    lastRecvSequence = recvSequence;
+}
+
 void handleFollowUpMessage(byte *buffer, int64_t drift_start_offset) {
     t1 = extractTimestamp(buffer, 34);
     if (t2 != 0) {
@@ -165,12 +190,22 @@ void handleFollowUpMessage(byte *buffer, int64_t drift_start_offset) {
     }
 }
 
+void processPTPEventMessage(byte *buffer, int size) {
+    byte messageType = buffer[0] & 0x0F;
+    if (messageType == SYNC) handleSyncMessage(buffer);
+}
+
 void processPTPGeneralMessage(byte *buffer, int size, int64_t drift_start_offset) {
     byte messageType = buffer[0] & 0x0F;
     if (messageType == FOLLOW_UP) {
         handleFollowUpMessage(buffer, drift_start_offset);
     }
 }
+
+void rtcSecondInterrupt () {
+    localSecondOffsetNs = esp_timer_get_time() * 1000ULL;
+}
+
 
 void setup() {
     Serial.begin(115200);
@@ -180,6 +215,11 @@ void setup() {
 
     Wire.begin();
     rtc.setClockMode(false); // Set 24h format
+    rtc.enableOscillator(true, false, itr_freq); // enable the 1 Hz output on interrupt pin
+
+    // set up to handle interrupt from 1 Hz pin
+    pinMode (RTC_ISR_PIN, INPUT_PULLUP);
+    attachInterrupt (digitalPinToInterrupt (RTC_ISR_PIN), rtcSecondInterrupt, RISING);
 
     // Initialize EEPROM and read stored sync time and offset
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
@@ -192,7 +232,6 @@ void setup() {
 
     Serial.printf("Stored sync time: %u\n", storedSyncTime);
     Serial.printf("Stored offset: %lld\n", storedOffset);
-
 }
 
 void loop() {
@@ -201,7 +240,11 @@ void loop() {
         initializeUDP();
     }
 
-    t2 = getCurrentTimeInNanos();
+    int packetSize = UdpEvent.parsePacket();
+    if (packetSize) {
+        UdpEvent.read(ptpMsgBuffer, PTP_MSG_SIZE);
+        processPTPEventMessage(ptpMsgBuffer, packetSize);
+    }
 
     int packetSize = UdpGeneral.parsePacket();
     if (packetSize) {

@@ -202,9 +202,9 @@ void sendDelayReq() {
 void handleSyncMessage(byte *buffer) {
     uint16_t recvSequence = (buffer[30] << 8) | buffer[31];
     if (recvSequence <= lastRecvSequence) return;
+    t2 = getCurrentTimeInNanos();
     
     lastRecvSequence = recvSequence;
-    t2 = getCurrentTimeInNanos();
 }
 
 void handleFollowUpMessage(byte *buffer) {

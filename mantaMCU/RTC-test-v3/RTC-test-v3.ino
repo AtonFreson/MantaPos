@@ -27,76 +27,7 @@ WiFiUDP UdpGeneral;
 IPAddress ptpMulticastIP(224, 0, 1, 129);
 IPAddress masterIP(169, 254, 178, 87);
 
-
-void setup()
-{
-  Serial.begin(115200);
-
-  // The WiFi part is borrowed from the ESP8266WiFi example.
-
-  // We start by connecting to a WiFi network
-
-  Serial.println();
-  Serial.println();
-
-
-  WiFi.onEvent(WiFiEvent);
-  ETH.begin();
-  ETH.config(local_ip, gateway, subnet, dns);
-
-  Wire.begin();
-  rtc.setClockMode(false); // Set 24h format
-
-  EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
-
-  esp1588.SetDomain(0);	//the domain of your PTP clock, 0 - 31
-  esp1588.Begin();
-}
-
-void loop()
-{
-
-  esp1588.Loop();	//this needs to be called OFTEN, at least several times per second but more is better. forget controlling program flow with delay() in your code.
-
-  
-  static uint32_t last_millis=0;
-
-  if(((esp1588.GetMillis()+250) / 4000) != ((last_millis+250) / 4000))	//print a status message every four seconds, slightly out of sync with the LEDs blinking for improved blink accuracy.
-  {
-    last_millis=esp1588.GetMillis();
-
-    ESP1588_Tracker & m=esp1588.GetMaster();
-    ESP1588_Tracker & c=esp1588.GetCandidate();
-
-
-    Serial.printf("PTP status: %s   Master %s, Candidate %s\n",esp1588.GetLockStatus()?"LOCKED":"UNLOCKED",m.Healthy()?"OK":"no",c.Healthy()?"OK":"no");
-
-    //this function is defined below, prints out the master and candidate clock IDs and some other info.
-    PrintPTPInfo(m);
-    PrintPTPInfo(c);
-
-    Serial.println(esp1588.GetShortStatusString());
-    Serial.println(esp1588.GetLastDiffMs());
-    
-    Serial.printf("\n");
-
-  }
-  
-  uint64_t currentMillis = esp1588.GetEpochMillis64();
-  if (esp1588.GetLockStatus() && esp1588.GetLastDiffMs() == 0 && currentMillis%1000 == 0) {
-    rtc.setEpoch(currentMillis/1000, false);
-
-    EEPROM.put(0, currentMillis/1000); // Store time at address 0
-    EEPROM.put(4, 0ULL); // Store offset at address 4
-    EEPROM.commit();
-
-    Serial.println("RTC set. Stopping...");
-    while(true) {
-      // Do nothing
-    }
-  }
-	
-}
+int lastPrint = 0;
 
 void WiFiEvent(arduino_event_t *event) {
     switch (event->event_id) {
@@ -161,14 +92,12 @@ void initializeUDP() {
     }
 }
 
-void PrintPTPInfo(ESP1588_Tracker & t)
-{
+void PrintPTPInfo(ESP1588_Tracker & t) {
 	const PTP_ANNOUNCE_MESSAGE & msg=t.GetAnnounceMessage();
 	const PTP_PORTID & pid=t.GetPortIdentifier();
 
 	Serial.printf("    %s: ID ",t.IsMaster()?"Master   ":"Candidate");
-	for(int i=0;i<(int) (sizeof(pid.clockId)/sizeof(pid.clockId[0]));i++)
-	{
+	for(int i=0;i<(int) (sizeof(pid.clockId)/sizeof(pid.clockId[0]));i++) {
 		Serial.printf("%02x ",pid.clockId[i]);
 	}
 
@@ -179,3 +108,52 @@ void PrintPTPInfo(ESP1588_Tracker & t)
 	Serial.printf("\n");
 }
 
+
+void setup() {
+    Serial.begin(115200);
+
+    Serial.println();
+
+    WiFi.onEvent(WiFiEvent);
+    ETH.begin();
+    ETH.config(local_ip, gateway, subnet, dns);
+
+    Wire.begin();
+    rtc.setClockMode(false); // Set 24h format
+
+    EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
+
+    esp1588.SetDomain(0);	//the domain of your PTP clock, 0 - 31
+    esp1588.Begin();
+}
+
+void loop() {
+    esp1588.Loop();	//this needs to be called OFTEN, at least several times per second but more is better. forget controlling program flow with delay() in your code.
+
+    // print a status message every four seconds
+    if (millis() - lastPrint > 4000) {
+        lastPrint = millis();
+
+        ESP1588_Tracker & m=esp1588.GetMaster();
+        Serial.printf("PTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"no", esp1588.GetShortStatusString());
+        PrintPTPInfo(m);
+    }
+
+    uint64_t currentMillis = esp1588.GetEpochMillis64();
+    if (esp1588.GetLockStatus() && esp1588.GetLastDiffMs() == 0 && currentMillis%1000 == 0) {
+        rtc.setEpoch(currentMillis/1000, false);
+
+        ESP1588_Tracker & m=esp1588.GetMaster();
+        Serial.printf("PTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"no", esp1588.GetShortStatusString());
+        PrintPTPInfo(m);
+
+        EEPROM.put(0, currentMillis/1000); // Store time at address 0
+        EEPROM.put(4, 0ULL); // Store offset at address 4
+        EEPROM.commit();
+
+        Serial.println("\nRTC set. Stopping...\n");
+        while(true) {
+            // Do nothing
+        }
+    }
+}
