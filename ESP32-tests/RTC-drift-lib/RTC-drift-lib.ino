@@ -3,12 +3,17 @@
 #include <WiFiUdp.h>
 #include <Wire.h>
 #include <DS3231.h>
+#include <ESP1588.h>
 #include <EEPROM.h> // Include EEPROM library
 
 #define RTC_ISR_PIN 2
 
 // Create DS3231 object
 DS3231 rtc;
+
+bool ethernetConnected = false;
+bool udpInitialized = false;
+
 
 // Network configuration
 IPAddress local_ip(169, 254, 178, 100);  
@@ -24,26 +29,18 @@ WiFiUDP UdpGeneral;
 IPAddress ptpMulticastIP(224, 0, 1, 129);
 IPAddress masterIP(169, 254, 178, 87);
 
-// PTP message types
-#define SYNC           0x00
-#define FOLLOW_UP      0x08
-
-#define PTP_MSG_SIZE 128
-byte ptpMsgBuffer[PTP_MSG_SIZE];
+byte itr_freq = 0x00;
 
 // Timing variables
-uint64_t t1 = 0;
-uint64_t t2 = 0;
 int64_t drift = 0;
-
-bool ethernetConnected = false;
-bool udpInitialized = false;
+uint64_t shiftNs = esp_timer_get_time() * 1000ULL;
+volatile uint64_t localSecondOffsetNs = esp_timer_get_time() * 1000ULL;
 
 uint32_t storedSyncTime = 0; // Store the last sync time read from EEPROM
 int64_t storedOffset = 0;    // Variable to store the offset read from EEPROM
 
-unsigned long lastPrintTime = 0;
-const unsigned long PRINT_INTERVAL = 5000; // 5 seconds in milliseconds
+int lastPrint = 0;
+const unsigned long PRINT_INTERVAL = 1000; // 5 seconds in milliseconds
 
 bool readyToPrint = false;
 int64_t lastCalculatedDrift = 0;
@@ -111,6 +108,22 @@ void initializeUDP() {
     }
 }
 
+void PrintPTPInfo(ESP1588_Tracker & t) {
+	const PTP_ANNOUNCE_MESSAGE & msg=t.GetAnnounceMessage();
+	const PTP_PORTID & pid=t.GetPortIdentifier();
+
+	Serial.printf("    %s: ID ",t.IsMaster()?"Master":"Candidate");
+	for(int i=0;i<(int) (sizeof(pid.clockId)/sizeof(pid.clockId[0]));i++) {
+		Serial.printf("%02x ",pid.clockId[i]);
+	}
+
+	Serial.printf(" Prio %3d ",msg.grandmasterPriority1);
+
+	Serial.printf(" %i-step",t.IsTwoStep()?2:1);
+
+	Serial.printf("\n");
+}
+
 // Use esp_timer_get_time() to get the current time from ESP32 in microseconds since boot
 uint64_t getCurrentTimeInNanos() {
     // Get current time from the RTC
@@ -122,21 +135,9 @@ uint64_t getCurrentTimeInNanos() {
     return (((uint64_t)now.unixtime() * 1000000000ULL) + shiftNs); // Convert to nanoseconds (x9)
 }
 
-uint64_t extractTimestamp(byte *buffer, int startIndex) {
-    uint64_t seconds = 0;
-    for (int i = 0; i < 6; i++) {
-        seconds = (seconds << 8) | buffer[startIndex + i];
-    }
-    uint32_t nanoseconds = 0;
-    for (int i = 0; i < 4; i++) {
-        nanoseconds = (nanoseconds << 8) | buffer[startIndex + 6 + i];
-    }
-    return (seconds * 1000000000ULL) + nanoseconds;
-}
-
 void printDriftInfo() {
     // Get current time in seconds
-    uint32_t currentTime = t2 / 1000000000ULL;
+    uint32_t currentTime = getCurrentTimeInNanos() / 1000000000ULL;
     uint32_t timeSinceSync = currentTime - storedSyncTime;
 
     // Calculate time components
@@ -173,35 +174,6 @@ void printDriftInfo() {
     }
 }
 
-void handleSyncMessage(byte *buffer) {
-    uint16_t recvSequence = (buffer[30] << 8) | buffer[31];
-    if (recvSequence <= lastRecvSequence) return;
-    t2 = getCurrentTimeInNanos();
-
-    lastRecvSequence = recvSequence;
-}
-
-void handleFollowUpMessage(byte *buffer, int64_t drift_start_offset) {
-    t1 = extractTimestamp(buffer, 34);
-    if (t2 != 0) {
-        lastCalculatedDrift = (int64_t)(t1 - t2) + drift_start_offset;
-        readyToPrint = true;
-        t1 = t2 = 0;
-    }
-}
-
-void processPTPEventMessage(byte *buffer, int size) {
-    byte messageType = buffer[0] & 0x0F;
-    if (messageType == SYNC) handleSyncMessage(buffer);
-}
-
-void processPTPGeneralMessage(byte *buffer, int size, int64_t drift_start_offset) {
-    byte messageType = buffer[0] & 0x0F;
-    if (messageType == FOLLOW_UP) {
-        handleFollowUpMessage(buffer, drift_start_offset);
-    }
-}
-
 void rtcSecondInterrupt () {
     localSecondOffsetNs = esp_timer_get_time() * 1000ULL;
 }
@@ -213,54 +185,46 @@ void setup() {
 
     Serial.println("DS3231 Drift Checker Starting");
 
+    WiFi.onEvent(WiFiEvent);
+    ETH.begin();
+    ETH.config(local_ip, gateway, subnet, dns);
+
     Wire.begin();
     rtc.setClockMode(false); // Set 24h format
     rtc.enableOscillator(true, false, itr_freq); // enable the 1 Hz output on interrupt pin
 
     // set up to handle interrupt from 1 Hz pin
     pinMode (RTC_ISR_PIN, INPUT_PULLUP);
-    attachInterrupt (digitalPinToInterrupt (RTC_ISR_PIN), rtcSecondInterrupt, RISING);
+    attachInterrupt (digitalPinToInterrupt (RTC_ISR_PIN), rtcSecondInterrupt, FALLING);
 
     // Initialize EEPROM and read stored sync time and offset
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
     EEPROM.get(0, storedSyncTime);   // Read the last stored sync time from EEPROM
     EEPROM.get(4, storedOffset);     // Read the offset from EEPROM
 
-    WiFi.onEvent(WiFiEvent);
-    ETH.begin();
-    ETH.config(local_ip, gateway, subnet, dns);
-
     Serial.printf("Stored sync time: %u\n", storedSyncTime);
     Serial.printf("Stored offset: %lld\n", storedOffset);
+
+    esp1588.SetDomain(0);	//the domain of your PTP clock, 0 - 31
+    esp1588.Begin();
 }
 
 void loop() {
-    if (!ethernetConnected || !udpInitialized) {
-        if (!ETH.linkUp()) ESP.restart();
-        initializeUDP();
-    }
+    esp1588.Loop();	//this needs to be called OFTEN, at least several times per second but more is better. forget controlling program flow with delay() in your code.
 
-    int packetSize = UdpEvent.parsePacket();
-    if (packetSize) {
-        UdpEvent.read(ptpMsgBuffer, PTP_MSG_SIZE);
-        processPTPEventMessage(ptpMsgBuffer, packetSize);
-    }
+    // print a status message
+    if (millis() - lastPrint > PRINT_INTERVAL) {
+        ESP1588_Tracker & m=esp1588.GetMaster();
+        lastPrint = millis();
 
-    int packetSize = UdpGeneral.parsePacket();
-    if (packetSize) {
-        UdpGeneral.read(ptpMsgBuffer, PTP_MSG_SIZE);
-        processPTPGeneralMessage(ptpMsgBuffer, packetSize, storedOffset);
-    }
-
-    // Handle printing with delay
-    unsigned long currentMillis = millis();
-    if (currentMillis - lastPrintTime >= PRINT_INTERVAL) {
-        lastPrintTime = currentMillis;
-        if (readyToPrint) {
+        Serial.printf("\nPTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"no", esp1588.GetShortStatusString());
+        PrintPTPInfo(m);
+        
+        if (esp1588.GetLockStatus() && m.Healthy()) {
+            lastCalculatedDrift = (int64_t)(esp1588.GetEpochMillis64()*1000000ULL - getCurrentTimeInNanos()) + storedOffset;
             printDriftInfo();
-            readyToPrint = false;
         } else {
-            Serial.println("Waiting for data packets...");
+            Serial.println("\n");
         }
     }
 }

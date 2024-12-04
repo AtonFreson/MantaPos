@@ -8,7 +8,6 @@
 
 DS3231 rtc;
 
-
 bool ethernetConnected = false;
 bool udpInitialized = false;
 
@@ -96,7 +95,7 @@ void PrintPTPInfo(ESP1588_Tracker & t) {
 	const PTP_ANNOUNCE_MESSAGE & msg=t.GetAnnounceMessage();
 	const PTP_PORTID & pid=t.GetPortIdentifier();
 
-	Serial.printf("    %s: ID ",t.IsMaster()?"Master   ":"Candidate");
+	Serial.printf("    %s: ID ",t.IsMaster()?"Master":"Candidate");
 	for(int i=0;i<(int) (sizeof(pid.clockId)/sizeof(pid.clockId[0]));i++) {
 		Serial.printf("%02x ",pid.clockId[i]);
 	}
@@ -111,8 +110,9 @@ void PrintPTPInfo(ESP1588_Tracker & t) {
 
 void setup() {
     Serial.begin(115200);
+    while (!Serial) delay(10);
 
-    Serial.println();
+    Serial.println("PTP RTC Sync Starting");
 
     WiFi.onEvent(WiFiEvent);
     ETH.begin();
@@ -129,29 +129,31 @@ void setup() {
 
 void loop() {
     esp1588.Loop();	//this needs to be called OFTEN, at least several times per second but more is better. forget controlling program flow with delay() in your code.
+    ESP1588_Tracker & m=esp1588.GetMaster();
 
     // print a status message every four seconds
     if (millis() - lastPrint > 4000) {
         lastPrint = millis();
 
-        ESP1588_Tracker & m=esp1588.GetMaster();
         Serial.printf("PTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"no", esp1588.GetShortStatusString());
         PrintPTPInfo(m);
     }
 
     uint64_t currentMillis = esp1588.GetEpochMillis64();
-    if (esp1588.GetLockStatus() && esp1588.GetLastDiffMs() == 0 && currentMillis%1000 == 0) {
+    if (esp1588.GetLockStatus() && m.Healthy() && esp1588.GetLastDiffMs() == 0 && currentMillis%1000 == 0) {
         rtc.setEpoch(currentMillis/1000, false);
 
-        ESP1588_Tracker & m=esp1588.GetMaster();
-        Serial.printf("PTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"no", esp1588.GetShortStatusString());
+        Serial.printf("PTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"NOT OK", esp1588.GetShortStatusString());
         PrintPTPInfo(m);
+        
+        uint64_t offset = 0;
 
+        Serial.printf("\nRTC set. Saving unixtime as %lu and offset as %llu\n", currentMillis/1000, offset);
         EEPROM.put(0, currentMillis/1000); // Store time at address 0
-        EEPROM.put(4, 0ULL); // Store offset at address 4
+        EEPROM.put(4, offset); // Store offset at address 4
         EEPROM.commit();
 
-        Serial.println("\nRTC set. Stopping...\n");
+        Serial.println("Stopping... \n");
         while(true) {
             // Do nothing
         }

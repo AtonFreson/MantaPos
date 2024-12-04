@@ -56,8 +56,8 @@ uint32_t storedSyncTime = 0;        // Variable to store the last sync time to E
 
 unsigned long rtcUpdateStartTime = 0; // Track when RTC updates started
 bool rtcUpdateExpired = false;        // Flag to indicate if RTC update period has expired
-volatile uint64_t localSecondOffsetNs = esp_timer_get_time() * 1000ULL;; // Offset in nanoseconds from the last full second
-uint64_t shiftNs = esp_timer_get_time() * 1000ULL;
+volatile uint64_t localSecondOffsetNs = esp_timer_get_time() * 1000ULL; // Offset in nanoseconds from the last full second
+uint64_t shiftNs = esp_timer_get_time() * 1000ULL; // Shift in nanoseconds from the last full second
 
 // Clock interrupt frequency
 // 0x00 = 1 Hz
@@ -404,7 +404,7 @@ void setup() {
 
     // set up to handle interrupt from 1 Hz pin
     pinMode (RTC_ISR_PIN, INPUT_PULLUP);
-    attachInterrupt (digitalPinToInterrupt (RTC_ISR_PIN), rtcSecondInterrupt, RISING);
+    attachInterrupt (digitalPinToInterrupt (RTC_ISR_PIN), rtcSecondInterrupt, FALLING);
 
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
     EEPROM.get(0, storedSyncTime); // Read the last stored sync time from EEPROM
