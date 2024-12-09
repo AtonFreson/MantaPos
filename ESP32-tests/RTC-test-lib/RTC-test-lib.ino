@@ -8,10 +8,6 @@
 
 DS3231 rtc;
 
-bool ethernetConnected = false;
-bool udpInitialized = false;
-
-
 // Network configuration
 IPAddress local_ip(169, 254, 178, 100);  
 IPAddress gateway(0, 0, 0, 0);           
@@ -46,13 +42,9 @@ void WiFiEvent(arduino_event_t *event) {
             break;
         case ARDUINO_EVENT_ETH_DISCONNECTED:
             Serial.println("ETH: Disconnected");
-            ethernetConnected = false;
-            udpInitialized = false;
             break;
         case ARDUINO_EVENT_ETH_STOP:
             Serial.println("ETH: Stopped");
-            ethernetConnected = false;
-            udpInitialized = false;
             break;
         default:
             break;
@@ -83,10 +75,8 @@ void initializeUDP() {
     }
 
     if (success) {
-        udpInitialized = true;
         Serial.println("UDP fully initialized");
     } else {
-        udpInitialized = false;
         Serial.println("UDP initialization failed");
     }
 }

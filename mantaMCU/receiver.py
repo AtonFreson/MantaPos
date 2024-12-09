@@ -24,6 +24,7 @@ cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 # List of unit names (can be edited)
 unit_names = ["X-axis Encoder", "Z-axis Encoder - Left", "Z-axis Encoder - Right", "Surface Pressure Sensor"]
 units_selected = [False] * len(unit_names)
+data_dict = {}
 
 # Shared variables and lock
 data_lock = threading.Lock()
@@ -31,11 +32,11 @@ received_data = None
 stop_threads = False
 button_pressed = False
 button_press_time = None
-wait_for_zero_position_selected = True  # New variable for the checkbox state
+wait_for_zero_position_selected = True
 
 # Constants for image dimensions
 IMG_WIDTH = 800
-IMG_HEIGHT = 900  # Adjusted height for the new elements
+IMG_HEIGHT = 930
 
 # Positions for data display (left side) and unit list (right side)
 DATA_START_X = 20
@@ -61,6 +62,10 @@ WAIT_CHECKBOX_SIZE = 20
 ZERO_BUTTON_Y1 = WAIT_CHECKBOX_Y + WAIT_CHECKBOX_SIZE + 20
 ZERO_BUTTON_Y2 = ZERO_BUTTON_Y1 + 40
 
+# Adjust coordinates for the new "Sync All Clocks" button
+SYNC_BUTTON_Y1 = ZERO_BUTTON_Y2 + 20
+SYNC_BUTTON_Y2 = SYNC_BUTTON_Y1 + 40
+
 def create_data_image(data_dict):
     # Create a black image
     img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
@@ -69,7 +74,7 @@ def create_data_image(data_dict):
     lines = []
     lines.append(f"Data Update: {datetime.now().strftime('%H:%M:%S')}")
     lines.append("")
-    
+
     if "encoder" in data_dict:
         enc = data_dict["encoder"]
         lines.append("Encoder Data:")
@@ -106,6 +111,23 @@ def create_data_image(data_dict):
         lines.append("Pressure Data:")
         lines.append(f"Timestamp * {press['timestamp']}")
         lines.append(f" Pressure ADC:   {press['adc_value']}")
+        lines.append("")
+
+    if "ptp" in data_dict:
+        press = data_dict["ptp"]
+        lines.append("PTP Clock Info:")
+        lines.append(f" Syncing: {press['syncing']}")
+        lines.append(f" Status:  {press['status']}")
+        lines.append(f" Difference:  {press['difference']}")
+        
+        time_since_sync = int(press['time_since_sync'])  # Convert to int to handle seconds
+        if time_since_sync < 0:
+            lines.append(f" Time Since Sync:  Err(Before Sync)")
+        else:
+            hours = time_since_sync // 3600
+            minutes = (time_since_sync % 3600) // 60
+            seconds = time_since_sync % 60
+            lines.append(f" Time Since Sync:  {hours:02d}:{minutes:02d}:{seconds:02d}")
     
     # Add text to left side of image
     y = DATA_START_Y
@@ -170,13 +192,19 @@ def create_data_image(data_dict):
     cv2.putText(img, "Zero Selected", (BUTTON_X1 + 20, ZERO_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (255, 255, 255), 2)
     
+    # Draw "Sync All Clocks" button
+    sync_button_color = (70, 70, 70) if not button_pressed else (0, 0, 255)
+    cv2.rectangle(img, (BUTTON_X1, SYNC_BUTTON_Y1), (BUTTON_X2, SYNC_BUTTON_Y2), sync_button_color, -1)
+    cv2.putText(img, "Sync All Clocks", (BUTTON_X1 + 20, SYNC_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
+                1, (255, 255, 255), 2)
+    
     return img
 
 def udp_listener():
     global received_data
     while not stop_threads:
         try:
-            data, addr = sock.recvfrom(1024)  # Buffer size is 1024 bytes
+            data, addr = sock.recvfrom(1024)
             with data_lock:
                 received_data = (addr, data.decode())
         except socket.timeout:
@@ -197,11 +225,12 @@ def mouse_callback(event, x, y, flags, param):
                 print(f"Unit {idx} {'selected' if units_selected[idx] else 'deselected'}: {unit_names[idx]}")
                 return  # Exit after handling checkbox click
         
+        # Check if click is inside "Wait for Index Position Signal" checkbox
         if (WAIT_CHECKBOX_X <= x <= WAIT_CHECKBOX_X + WAIT_CHECKBOX_SIZE and
               WAIT_CHECKBOX_Y <= y <= WAIT_CHECKBOX_Y + WAIT_CHECKBOX_SIZE):
 
             wait_for_zero_position_selected = not wait_for_zero_position_selected
-            print(f"Wait for Zero Position Signal {'selected' if wait_for_zero_position_selected else 'deselected'}")
+            print(f"Wait for Index Position Signal {'selected' if wait_for_zero_position_selected else 'deselected'}")
         
         selected_units = [idx for idx, selected in enumerate(units_selected) if selected]
         command_dict = None
@@ -215,9 +244,13 @@ def mouse_callback(event, x, y, flags, param):
                 command_dict = {"units": selected_units, "command": "zero wait"}
             else:
                 command_dict = {"units": selected_units, "command": "zero now"}
+        # Check if click is inside "Sync All Clocks" button
+        elif BUTTON_X1 <= x <= BUTTON_X2 and SYNC_BUTTON_Y1 <= y <= SYNC_BUTTON_Y2:
+            selected_units = list(range(len(unit_names))) # Automatically select all units
+            command_dict = {"units": selected_units, "command": "sync"}
         
         # Send command if button was pressed and units are selected
-        if command_dict and any(units_selected):
+        if command_dict and selected_units != []:
             button_pressed = True
             button_press_time = datetime.now()
             
@@ -254,12 +287,12 @@ try:
                 try:
                     data_dict = json.loads(data)
                 except json.JSONDecodeError as e:
-                    print(f"Failed to parse JSON data: {e}")
+                    print(f"\nFailed to parse JSON data: {e}")
                     print(f"Received data:\n{data}")
                     data_dict = {}
                 received_data = None
-            else:
-                data_dict = {}
+            #else:
+            #    data_dict = {}
         
         # Create and show image
         img = create_data_image(data_dict)
