@@ -24,7 +24,8 @@ cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 # List of unit names (can be edited)
 unit_names = ["X-axis Encoder", "Z-axis Encoder - Left", "Z-axis Encoder - Right", "Surface Pressure Sensor"]
 units_selected = [False] * len(unit_names)
-data_dict = {}
+# list of all data dicts, one for each unit
+data_dicts = [{} for _ in range(len(unit_names))]
 
 # Shared variables and lock
 data_lock = threading.Lock()
@@ -34,16 +35,18 @@ button_pressed = False
 button_press_time = None
 wait_for_zero_position_selected = True
 
-# Constants for image dimensions
-IMG_WIDTH = 800
-IMG_HEIGHT = 930
-
-# Positions for data display (left side) and unit list (right side)
-DATA_START_X = 20
+# Positions for data displays (left side)
+DATA_START_X = 10
 DATA_START_Y = 20
+DATA_SPACING_X = 360
+DATA_ROW_Y = 30
+SPACER_WIDTH = 5 # Width of the white vertical spacer lines
 
-CHECKBOX_START_X = 420
-CHECKBOX_START_Y = 20
+# Position for unit list and user input options (right side)
+TIME_START_X = 20
+
+CHECKBOX_START_X = DATA_START_X + DATA_SPACING_X * len(unit_names) + 5
+CHECKBOX_START_Y = TIME_START_X + 30
 CHECKBOX_SIZE = 20
 CHECKBOX_GAP = 30
 
@@ -66,13 +69,15 @@ ZERO_BUTTON_Y2 = ZERO_BUTTON_Y1 + 40
 SYNC_BUTTON_Y1 = ZERO_BUTTON_Y2 + 20
 SYNC_BUTTON_Y2 = SYNC_BUTTON_Y1 + 40
 
-def create_data_image(data_dict):
-    # Create a black image
-    img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
-    
-    # Left side data display
+# Constants for image dimensions
+IMG_WIDTH = CHECKBOX_START_X + 370
+IMG_HEIGHT = 960
+
+def create_unit_lines(data_dict, unit_name):
     lines = []
-    lines.append(f"Data Update: {datetime.now().strftime('%H:%M:%S')}")
+    
+    # Add unit name at the top
+    lines.append(unit_name)
     lines.append("")
 
     if "encoder" in data_dict:
@@ -110,7 +115,8 @@ def create_data_image(data_dict):
         press = data_dict["pressure"]
         lines.append("Pressure Data:")
         lines.append(f"Timestamp * {press['timestamp']}")
-        lines.append(f" Pressure ADC:   {press['adc_value']}")
+        lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
+        lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
         lines.append("")
 
     if "ptp" in data_dict:
@@ -118,7 +124,7 @@ def create_data_image(data_dict):
         lines.append("PTP Clock Info:")
         lines.append(f" Syncing: {press['syncing']}")
         lines.append(f" Status:  {press['status']}")
-        lines.append(f" Difference:  {press['difference']}")
+        lines.append(f" {press['details']}")
         
         time_since_sync = int(press['time_since_sync'])  # Convert to int to handle seconds
         if time_since_sync < 0:
@@ -128,14 +134,34 @@ def create_data_image(data_dict):
             minutes = (time_since_sync % 3600) // 60
             seconds = time_since_sync % 60
             lines.append(f" Time Since Sync:  {hours:02d}:{minutes:02d}:{seconds:02d}")
+        
+        lines.append(f" Diff to Slave:  {press['difference']}ms")
     
-    # Add text to left side of image
-    y = DATA_START_Y
-    for line in lines:
-        cv2.putText(img, line, (DATA_START_X, y), cv2.FONT_HERSHEY_SIMPLEX, 
-                    0.7, (255, 255, 255), 2)
-        y += 30
+    return lines
     
+
+def create_data_image(data_dicts):
+    # Create a black image
+    img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
+    
+    for i in range(len(unit_names)):
+        lines = create_unit_lines(data_dicts[i], unit_names[i])
+
+        # Add data text for unit
+        y = DATA_START_Y
+        for line in lines:
+            cv2.putText(img, line, (DATA_START_X + DATA_SPACING_X*i, y), cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.7, (255, 255, 255), 2)
+            y += DATA_ROW_Y
+        
+        # Draw vertical spacer line
+        spacer_x = DATA_START_X + DATA_SPACING_X * (i + 1) - SPACER_WIDTH // 2 - 10
+        cv2.line(img, (spacer_x, 0), (spacer_x, IMG_HEIGHT), (255, 255, 255), SPACER_WIDTH)
+    
+    # Display "Desktop Time" above the unit boxes
+    cv2.putText(img, f"Desktop Time: {datetime.now().timestamp():.3f}", (CHECKBOX_START_X, TIME_START_X),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
     # Right side unit list and checkboxes
     for idx, unit_name in enumerate(unit_names):
         # Draw checkbox
@@ -183,7 +209,7 @@ def create_data_image(data_dict):
     
     # Draw the label next to the checkbox
     text_position = (checkbox_bottom_right[0] + 10, checkbox_top_left[1] + WAIT_CHECKBOX_SIZE - 5)
-    cv2.putText(img, "Wait for Zero Position Signal", text_position, cv2.FONT_HERSHEY_SIMPLEX,
+    cv2.putText(img, "Wait for Index Position Signal", text_position, cv2.FONT_HERSHEY_SIMPLEX,
                 0.7, (255, 255, 255), 2)
     
     # Draw "Zero Selected" button
@@ -286,16 +312,17 @@ try:
                 addr, data = received_data
                 try:
                     data_dict = json.loads(data)
+                    unit_num = int(data_dict["mpu_unit"])
+                    data_dicts[unit_num] = data_dict
                 except json.JSONDecodeError as e:
                     print(f"\nFailed to parse JSON data: {e}")
                     print(f"Received data:\n{data}")
-                    data_dict = {}
                 received_data = None
             #else:
             #    data_dict = {}
         
         # Create and show image
-        img = create_data_image(data_dict)
+        img = create_data_image(data_dicts)
         cv2.imshow("Sensor Data", img)
         
         # Check if button was pressed and change color back after 1 second

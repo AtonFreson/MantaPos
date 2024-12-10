@@ -80,7 +80,8 @@ volatile uint64_t localSecondOffsetNs = esp_timer_get_time() * 1000ULL;
 float ax_mss, ay_mss, az_mss;
 float gx_rads, gy_rads, gz_rads;
 float temperature;
-int16_t adc_value;
+int16_t adc_value0;
+int16_t adc_value1;
 float g = 9.818584897; // m/s²
 
 // Real Time Clock configuration
@@ -261,22 +262,18 @@ void dataPrint(ESP1588_Tracker & m) {
     currentCount = encoderCount;
     interrupts();
 
-    if (currentCount-lastEncoderCount != 0) {
-        unsigned long timeDelta = encoderTimestamp - lastMeasurementTime;
-        revolutions = (float)currentCount / COUNTS_PER_REV;
-        distance = currentCount * DISTANCE_PER_COUNT;
+    // Calculate distance
+    revolutions = (float)currentCount / COUNTS_PER_REV;
+    distance = currentCount * DISTANCE_PER_COUNT;
 
-        // Calculate speed
-        float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
-        rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
-        speed = countsPerSec * DISTANCE_PER_COUNT;
+    // Calculate speed
+    unsigned long timeDelta = encoderTimestamp - lastMeasurementTime;
+    float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
+    rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
+    speed = countsPerSec * DISTANCE_PER_COUNT;
 
-        lastEncoderCount = currentCount;
-        lastMeasurementTime = encoderTimestamp;
-    } else {
-        rpm = 0;
-        speed = 0;
-    }
+    lastEncoderCount = currentCount;
+    lastMeasurementTime = encoderTimestamp;
 
     // IMU data capture
     imuTimestamp = getEpochMillis64();
@@ -296,7 +293,8 @@ void dataPrint(ESP1588_Tracker & m) {
 
     // Pressure data capture
     pressureTimestamp = getEpochMillis64();
-    adc_value = ads.readADC_SingleEnded(0);
+    adc_value0 = ads.readADC_SingleEnded(0);
+    adc_value1 = ads.readADC_SingleEnded(1);
 
     // Print data to Serial if connected
     if (SerialW.getSerialConnected()) {
@@ -323,23 +321,26 @@ void dataPrint(ESP1588_Tracker & m) {
         Serial.println();
 
         Serial.println("Pressure Data (T:" + String(pressureTimestamp) + "):");
-        Serial.print("Pressure: "); Serial.println(adc_value);
+        Serial.print("Pressure 0: "); Serial.println(adc_value0);
+        Serial.print("Pressure 1: "); Serial.println(adc_value1);
         Serial.println();
     }
 
     char jsonBuffer[1024];
     snprintf(jsonBuffer, sizeof(jsonBuffer),
-        "{\"encoder\": {\"timestamp\": %llu, \"revolutions\": %.3f, \"rpm\": %.3f, \"speed\": %.3f, \"distance\": %.3f}, "
+        "{\"mpu_unit\": \"%d\", "
+        "\"encoder\": {\"timestamp\": %llu, \"revolutions\": %.3f, \"rpm\": %.3f, \"speed\": %.3f, \"distance\": %.3f}, "
         "\"imu\": {\"timestamp\": %llu, \"acceleration\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}, \"gyroscope\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}}, "
         "\"temperature\": {\"timestamp\": %llu, \"value\": %.2f}, "
-        "\"pressure\": {\"timestamp\": %llu, \"adc_value\": %d}, "
-        "\"ptp\": {\"syncing\": \"%s\", \"status\": \"%s   Master %s   Delay %s\", \"difference\": \"%lld\", \"time_since_sync\": \"%lld\"}}",
+        "\"pressure\": {\"timestamp\": %llu, \"adc_value0\": %d, \"adc_value1\": %d}, "
+        "\"ptp\": {\"syncing\": \"%s\", \"status\": \"%s\", \"details\": \"Master %s   Delay %s\", \"difference\": \"%lld\", \"time_since_sync\": \"%lld\"}}",
+        MPU_UNIT,
         encoderTimestamp, revolutions, rpm, speed, distance,
         imuTimestamp, ax_mss, ay_mss, az_mss, gx_rads, gy_rads, gz_rads,
         tempTimestamp, temperature,
-        pressureTimestamp, adc_value,
+        pressureTimestamp, adc_value0, adc_value1,
         sync_clock?"IN PROGRESS...":"DONE/NOT STARTED", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"NOT OK", esp1588.GetShortStatusString(),
-        (int64_t)(getEpochMillis64(true)-500000000), (int64_t)(getEpochMillis64()/1000ULL - storedSyncTime));
+            (int64_t)(getEpochMillis64(true)-500000000), (int64_t)(getEpochMillis64()/1000ULL - storedSyncTime));
 
     // Send over UDP
     udp.beginPacket(udpAddress, udpPort);
