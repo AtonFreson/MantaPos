@@ -34,11 +34,13 @@ stop_threads = False
 button_pressed = False
 button_press_time = None
 wait_for_zero_position_selected = True
+ref_unit_time = None
+ref_unit_number = 0
 
 # Positions for data displays (left side)
 DATA_START_X = 10
 DATA_START_Y = 20
-DATA_SPACING_X = 360
+DATA_SPACING_X = 370
 DATA_ROW_Y = 30
 SPACER_WIDTH = 5 # Width of the white vertical spacer lines
 
@@ -71,19 +73,33 @@ SYNC_BUTTON_Y2 = SYNC_BUTTON_Y1 + 40
 
 # Constants for image dimensions
 IMG_WIDTH = CHECKBOX_START_X + 370
-IMG_HEIGHT = 960
+IMG_HEIGHT = 990
 
-def create_unit_lines(data_dict, unit_name):
+def update_time_diff(timestamp, time_diff, ref_unit):
+    global ref_unit_time
+    if ref_unit_time == None:
+        ref_unit_time = int(timestamp)
+        ref_unit = True
+    elif time_diff == None and not ref_unit:
+        time_diff = ref_unit_time - int(timestamp)
+    return time_diff, ref_unit
+
+def create_unit_lines(data_dict, unit_number):
+    global ref_unit_number
     lines = []
+    time_diff = None
+    ref_unit = False
     
     # Add unit name at the top
-    lines.append(unit_name)
-    lines.append("")
+    lines.append(unit_names[unit_number].center(30))
 
     if "encoder" in data_dict:
         enc = data_dict["encoder"]
         lines.append("Encoder Data:")
         lines.append(f"Timestamp * {enc['timestamp']}")
+        
+        time_diff, ref_unit = update_time_diff(enc['timestamp'], time_diff, ref_unit)
+
         lines.append(f" Rev:     {enc['revolutions']: .5f}")
         lines.append(f" RPM:    {enc['rpm']: .5f} rpm")
         lines.append(f" Speed:  {enc['speed']: .5f} m/s")
@@ -94,6 +110,9 @@ def create_unit_lines(data_dict, unit_name):
         imu = data_dict["imu"]
         lines.append("IMU Data:")
         lines.append(f"Timestamp * {imu['timestamp']}")
+
+        time_diff, ref_unit = update_time_diff(imu['timestamp'], time_diff, ref_unit)
+
         acc = imu["acceleration"]
         lines.append(f" Accel X:    {acc['x']: .5f} m/s^2")
         lines.append(f" Accel Y:    {acc['y']: .5f} m/s^2")
@@ -108,6 +127,9 @@ def create_unit_lines(data_dict, unit_name):
         temp = data_dict["temperature"]
         lines.append("Temperature Data:")
         lines.append(f"Timestamp * {temp['timestamp']}")
+
+        time_diff, ref_unit = update_time_diff(temp['timestamp'], time_diff, ref_unit)
+
         lines.append(f" Temperature:   {temp['value']: .2f} C")
         lines.append("")
     
@@ -115,10 +137,13 @@ def create_unit_lines(data_dict, unit_name):
         press = data_dict["pressure"]
         lines.append("Pressure Data:")
         lines.append(f"Timestamp * {press['timestamp']}")
+
+        time_diff, ref_unit = update_time_diff(press['timestamp'], time_diff, ref_unit)
+
         lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
         lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
         lines.append("")
-
+    
     if "ptp" in data_dict:
         press = data_dict["ptp"]
         lines.append("PTP Clock Info:")
@@ -128,24 +153,35 @@ def create_unit_lines(data_dict, unit_name):
         
         time_since_sync = int(press['time_since_sync'])  # Convert to int to handle seconds
         if time_since_sync < 0:
-            lines.append(f" Time Since Sync:  Err(Before Sync)")
+            lines.append(f" Time Since Sync: Err(Neg. Vl.)")
         else:
             hours = time_since_sync // 3600
             minutes = (time_since_sync % 3600) // 60
             seconds = time_since_sync % 60
-            lines.append(f" Time Since Sync:  {hours:02d}:{minutes:02d}:{seconds:02d}")
-        
-        lines.append(f" Diff to Slave:  {press['difference']}ms")
+            lines.append(f" Time Since Sync: {hours:02d}:{minutes:02d}:{seconds:02d}")
+
+        if abs(int(press['difference'])) < 1700000000000:
+            lines.append(f" RTC Diff: {press['difference']}ms")
+        else:
+            lines.append(f" RTC Diff: Err(Out of Range)")
+
+    if ref_unit:
+        ref_unit_number = unit_number
+    if data_dict != {}:
+        lines.append(f" Difference to Unit {ref_unit_number}: {'- ' if time_diff is None else time_diff}ms")
     
     return lines
-    
 
 def create_data_image(data_dicts):
+    global ref_unit_time
+
     # Create a black image
     img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
     
+    # Left side data displays from units
+    ref_unit_time = None
     for i in range(len(unit_names)):
-        lines = create_unit_lines(data_dicts[i], unit_names[i])
+        lines = create_unit_lines(data_dicts[i], i)
 
         # Add data text for unit
         y = DATA_START_Y
@@ -158,11 +194,13 @@ def create_data_image(data_dicts):
         spacer_x = DATA_START_X + DATA_SPACING_X * (i + 1) - SPACER_WIDTH // 2 - 10
         cv2.line(img, (spacer_x, 0), (spacer_x, IMG_HEIGHT), (255, 255, 255), SPACER_WIDTH)
     
+
+    ### Right side unit list and user input options ###
     # Display "Desktop Time" above the unit boxes
     cv2.putText(img, f"Desktop Time: {datetime.now().timestamp():.3f}", (CHECKBOX_START_X, TIME_START_X),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-    # Right side unit list and checkboxes
+    # Unit selection checkboxes
     for idx, unit_name in enumerate(unit_names):
         # Draw checkbox
         top_left = (CHECKBOX_START_X, CHECKBOX_START_Y + idx * CHECKBOX_GAP)
@@ -312,14 +350,21 @@ try:
                 addr, data = received_data
                 try:
                     data_dict = json.loads(data)
-                    unit_num = int(data_dict["mpu_unit"])
-                    data_dicts[unit_num] = data_dict
-                except json.JSONDecodeError as e:
-                    print(f"\nFailed to parse JSON data: {e}")
+                    unit_num_str = data_dict.get("mpu_unit")
+                    if unit_num_str is None:
+                        print("Warning: 'mpu_unit' key missing in data")
+                        unit_num = -1  # Invalid unit number
+                    else:
+                        unit_num = int(unit_num_str)
+
+                    if 0 <= unit_num < len(data_dicts):
+                        data_dicts[unit_num] = data_dict
+                    else:
+                        print(f"Warning: Invalid unit number received: {unit_num}")
+                except Exception as e:
+                    print(f"\nException occurred during data processing: {e}")
                     print(f"Received data:\n{data}")
                 received_data = None
-            #else:
-            #    data_dict = {}
         
         # Create and show image
         img = create_data_image(data_dicts)
