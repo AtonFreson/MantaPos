@@ -81,7 +81,7 @@ float ax_mss, ay_mss, az_mss;
 float gx_rads, gy_rads, gz_rads;
 float temperature;
 int16_t adc_value;
-float g = 9.80665; // m/s²
+float g = 9.818584897; // m/s²
 
 // Real Time Clock configuration
 DS3231 rtc;
