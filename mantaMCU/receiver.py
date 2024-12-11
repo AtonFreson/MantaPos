@@ -22,10 +22,12 @@ cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
 # List of unit names (can be edited)
-unit_names = ["X-axis Encoder", "Z-axis Encoder - Left", "Z-axis Encoder - Right", "Surface Pressure Sensor"]
+unit_names = ["X-axis Encoder", "Z-axis Encoder - Main", "Z-axis Encoder - Second", "Surface Pressure Sensor"]
 units_selected = [False] * len(unit_names)
 # list of all data dicts, one for each unit
 data_dicts = [{} for _ in range(len(unit_names))]
+last_received_times = [0] * len(unit_names)
+time_diff_history = [[] for _ in range(len(unit_names))]
 
 # Shared variables and lock
 data_lock = threading.Lock()
@@ -35,7 +37,8 @@ button_pressed = False
 button_press_time = None
 wait_for_zero_position_selected = True
 ref_unit_time = None
-ref_unit_number = 0
+ref_unit = 0
+print_range = 60 * 60 * 1000  # Maximum range for printing RTC difference, 60 minutes
 
 # Positions for data displays (left side)
 DATA_START_X = 10
@@ -75,20 +78,21 @@ SYNC_BUTTON_Y2 = SYNC_BUTTON_Y1 + 40
 IMG_WIDTH = CHECKBOX_START_X + 370
 IMG_HEIGHT = 990
 
-def update_time_diff(timestamp, time_diff, ref_unit):
-    global ref_unit_time
+
+def update_time_diff(timestamp, time_diff, current_unit):
+    global ref_unit_time, ref_unit
     if ref_unit_time == None:
         ref_unit_time = int(timestamp)
-        ref_unit = True
-    elif time_diff == None and not ref_unit:
-        time_diff = ref_unit_time - int(timestamp)
-    return time_diff, ref_unit
+        ref_unit = current_unit
+    elif time_diff == None and ref_unit != current_unit:
+        recording_time_diff = int((last_received_times[current_unit] - last_received_times[ref_unit])*1000)
+        time_diff = ref_unit_time - int(timestamp) + recording_time_diff
+    return time_diff
 
 def create_unit_lines(data_dict, unit_number):
-    global ref_unit_number
+    global ref_unit
     lines = []
     time_diff = None
-    ref_unit = False
     
     # Add unit name at the top
     lines.append(unit_names[unit_number].center(30))
@@ -96,23 +100,42 @@ def create_unit_lines(data_dict, unit_number):
     if "encoder" in data_dict:
         enc = data_dict["encoder"]
         lines.append("Encoder Data:")
-        lines.append(f"Timestamp * {enc['timestamp']}")
-        
-        time_diff, ref_unit = update_time_diff(enc['timestamp'], time_diff, ref_unit)
-
+        lines.append(f"-- Time: {int(enc['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(enc['timestamp'], time_diff, unit_number)
         lines.append(f" Rev:     {enc['revolutions']: .5f}")
         lines.append(f" RPM:    {enc['rpm']: .5f} rpm")
         lines.append(f" Speed:  {enc['speed']: .5f} m/s")
         lines.append(f" Dist:    {enc['distance']: .5f} m")
         lines.append("")
+    else:
+        for i in range(7): lines.append("")
     
+    if "temperature" in data_dict:
+        temp = data_dict["temperature"]
+        lines.append("Temperature Data:")
+        lines.append(f"-- Time: {int(temp['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(temp['timestamp'], time_diff, unit_number)
+        lines.append(f" Temperature:   {temp['value']: .2f} C")
+        lines.append("")
+    else:
+        for i in range(4): lines.append("")
+    
+    if "pressure" in data_dict:
+        press = data_dict["pressure"]
+        lines.append("Pressure Data:")
+        lines.append(f"-- Time: {int(press['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(press['timestamp'], time_diff, unit_number)
+        lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
+        lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
+        lines.append("")
+    else:
+        for i in range(5): lines.append("")
+
     if "imu" in data_dict:
         imu = data_dict["imu"]
         lines.append("IMU Data:")
-        lines.append(f"Timestamp * {imu['timestamp']}")
-
-        time_diff, ref_unit = update_time_diff(imu['timestamp'], time_diff, ref_unit)
-
+        lines.append(f"-- Time: {int(imu['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(imu['timestamp'], time_diff, unit_number)
         acc = imu["acceleration"]
         lines.append(f" Accel X:    {acc['x']: .5f} m/s^2")
         lines.append(f" Accel Y:    {acc['y']: .5f} m/s^2")
@@ -122,27 +145,8 @@ def create_unit_lines(data_dict, unit_number):
         lines.append(f" Gyro Y:     {gyro['y']: .5f} rad/s")
         lines.append(f" Gyro Z:     {gyro['z']: .5f} rad/s")
         lines.append("")
-    
-    if "temperature" in data_dict:
-        temp = data_dict["temperature"]
-        lines.append("Temperature Data:")
-        lines.append(f"Timestamp * {temp['timestamp']}")
-
-        time_diff, ref_unit = update_time_diff(temp['timestamp'], time_diff, ref_unit)
-
-        lines.append(f" Temperature:   {temp['value']: .2f} C")
-        lines.append("")
-    
-    if "pressure" in data_dict:
-        press = data_dict["pressure"]
-        lines.append("Pressure Data:")
-        lines.append(f"Timestamp * {press['timestamp']}")
-
-        time_diff, ref_unit = update_time_diff(press['timestamp'], time_diff, ref_unit)
-
-        lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
-        lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
-        lines.append("")
+    else:
+        for i in range(9): lines.append("")
     
     if "ptp" in data_dict:
         press = data_dict["ptp"]
@@ -151,7 +155,7 @@ def create_unit_lines(data_dict, unit_number):
         lines.append(f" Status:  {press['status']}")
         lines.append(f" {press['details']}")
         
-        time_since_sync = int(press['time_since_sync'])  # Convert to int to handle seconds
+        time_since_sync = int(press['time_since_sync'])
         if time_since_sync < 0:
             lines.append(f" Time Since Sync: Err(Neg. Vl.)")
         else:
@@ -160,15 +164,34 @@ def create_unit_lines(data_dict, unit_number):
             seconds = time_since_sync % 60
             lines.append(f" Time Since Sync: {hours:02d}:{minutes:02d}:{seconds:02d}")
 
-        if abs(int(press['difference'])) < 1700000000000:
-            lines.append(f" RTC Diff: {press['difference']}ms")
+        if abs(int(press['difference'])) < print_range:
+            lines.append(f" RTC Diff:   {press['difference']}ms")
         else:
-            lines.append(f" RTC Diff: Err(Out of Range)")
+            lines.append(f" RTC Diff:   Err(Out of Range)")
 
-    if ref_unit:
-        ref_unit_number = unit_number
     if data_dict != {}:
-        lines.append(f" Difference to Unit {ref_unit_number}: {'- ' if time_diff is None else time_diff}ms")
+        if time_diff is not None:
+            # Store time_diff in the history for this unit
+            time_diff_history[unit_number].append(time_diff)
+
+            # Keep only the last N time_diffs (e.g., N=10)
+            if len(time_diff_history[unit_number]) > 200:
+                time_diff_history[unit_number].pop(0)
+
+            # Compute the moving average
+            avg_time_diff = sum(time_diff_history[unit_number]) / len(time_diff_history[unit_number])
+        else:
+            avg_time_diff = None
+
+        if time_diff is not None:
+            if abs(time_diff) > print_range:
+                lines.append(f" Unit {ref_unit} Diff: Err(Out of Range)")
+            elif avg_time_diff is not None:
+                lines.append(f" Unit {ref_unit} Diff: {time_diff}ms ({avg_time_diff:.0f}ms)")
+            else:
+                lines.append(f" Unit {ref_unit} Diff: {time_diff}ms")
+        else:
+            lines.append(f" Unit {ref_unit} Diff: N/A")
     
     return lines
 
@@ -359,6 +382,7 @@ try:
 
                     if 0 <= unit_num < len(data_dicts):
                         data_dicts[unit_num] = data_dict
+                        last_received_times[unit_num] = datetime.now().timestamp()
                     else:
                         print(f"Warning: Invalid unit number received: {unit_num}")
                 except Exception as e:
@@ -366,6 +390,13 @@ try:
                     print(f"Received data:\n{data}")
                 received_data = None
         
+        # Clear data for units that haven't sent data in the last few seconds
+        current_time = datetime.now().timestamp()
+        for unit_num in range(len(unit_names)):
+            if current_time - last_received_times[unit_num] > 5.0:
+                data_dicts[unit_num] = {}
+                time_diff_history[unit_num] = []
+
         # Create and show image
         img = create_data_image(data_dicts)
         cv2.imshow("Sensor Data", img)

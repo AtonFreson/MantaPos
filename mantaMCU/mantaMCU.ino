@@ -10,7 +10,7 @@
 #include <ESP1588.h>
 #include <EEPROM.h>
 
-// The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Left", 2:"Z-axis Encoder - Right", 3:"Surface Pressure Sensor" 
+// The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Main", 2:"Z-axis Encoder - Second", 3:"Surface Pressure Sensor" 
 #define MPU_UNIT 1
 
 // Features available on this unit
@@ -463,10 +463,10 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(INDEX_PIN_Z_POS), indexISR, RISING);
 #endif
 
-    delay(1000); // Wait a bit for serial connection to be established
-    SerialW.println("\nSCA50-400 Encoder Test");
-    SerialW.println("PPR: 400");
-    SerialW.println("Resolution: ±0.10mm\n");
+    //delay(1000); // Wait a bit for serial connection to be established
+    //SerialW.println("\nSCA50-400 Encoder Test");
+    //SerialW.println("PPR: 400");
+    //SerialW.println("Resolution: ±0.10mm\n");
 
     // Initialize Ethernet and register event handler
     WiFi.onEvent(WiFiEvent);
@@ -482,9 +482,12 @@ void setup() {
     udp.begin(udpPort);           // Existing UDP for sending data (port 13233)
     udpCommand.begin(udpCommandPort);      // New UDP for receiving commands
 
+#if HAS_IMU || HAS_CLOCK
+    Wire.begin(I2C_SDA, I2C_SCL);
+#endif
+
 #if HAS_IMU
     // Initialize IMU (accelerometer and gyroscope)
-    Wire.begin(I2C_SDA, I2C_SCL);
     SerialW.println("Initializing IMU devices...");
     accelgyro.initialize();
 
@@ -600,6 +603,7 @@ void loop() {
                     if (strcmp(command, "reboot") == 0) {
                         ESP.restart();
                     }
+#if HAS_ENCODER
                     else if (strcmp(command, "zero wait") == 0) {
                         noInterrupts();
                         resetCommandReceived = true;
@@ -607,30 +611,32 @@ void loop() {
                     }
                     else if (strcmp(command, "zero now") == 0) {
                         noInterrupts();
-#if HAS_ENCODER
+
                         lastEncoderCount = lastEncoderCount - encoderCount; // Adjust the last count relative to zero
                         encoderCount = 0; // Reset the encoder count
-#endif
+
                         resetOccurred = true; // Set the reset occurred flag
                         interrupts();
                     }
+#endif
+#if HAS_CLOCK
                     else if (strcmp(command, "sync") == 0) {
                         sync_clock = true;
-#if HAS_IMU
                     }
+#endif
+#if HAS_IMU
                     else if (strcmp(command, "calibrate imu") == 0) {
                         // Add IMU calibration code here
-#endif
                     }
+#endif
                     break;
                 }
             }
         }
     }
-
+#if HAS_CLOCK
     uint64_t currentMillis = esp1588.GetEpochMillis64();
     if (sync_clock && esp1588.GetLockStatus() && m.Healthy() && esp1588.GetLastDiffMs() == 0 && currentMillis % 1000 == 0) {
-#if HAS_CLOCK
         rtc.setEpoch(currentMillis / 1000, false);
 
         SerialW.printf("PTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus() ? "LOCKED" : "UNLOCKED", m.Healthy() ? "OK" : "NOT OK", esp1588.GetShortStatusString());
@@ -646,6 +652,6 @@ void loop() {
         storedOffset = offset;
 
         sync_clock = false;
-#endif
     }
+#endif
 }
