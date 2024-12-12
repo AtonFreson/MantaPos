@@ -5,6 +5,7 @@ import sys
 import cv2
 import numpy as np
 from datetime import datetime
+import os
 
 # UDP socket parameters
 UDP_IP = ''           # Listen on all available network interfaces
@@ -29,6 +30,9 @@ data_dicts = [{} for _ in range(len(unit_names))]
 last_received_times = [0] * len(unit_names)
 time_diff_history = [[] for _ in range(len(unit_names))]
 
+# Data recording folder
+recording_folder = "recordings"
+
 # Shared variables and lock
 data_lock = threading.Lock()
 received_data = None
@@ -39,6 +43,20 @@ wait_for_zero_position_selected = True
 ref_unit_time = None
 ref_unit = 0
 print_range = 60 * 60 * 1000  # Maximum range for printing RTC difference, 60 minutes
+recording_timestamp = ""
+recording_last_filename = ""
+
+# Recording-related globals
+recording = False
+default_filename = "data"
+save_filepath = os.path.join(recording_folder, f"{default_filename}.json")
+input_box_focused = False
+input_box_text = ""
+recording_start_time = None
+last_recording_save_time = None
+recording_units = []
+recording_data_buffer = []
+recording_interval = 10.0  # append every 10 seconds
 
 # Positions for data displays (left side)
 DATA_START_X = 10
@@ -61,18 +79,34 @@ BUTTON_Y1 = CHECKBOX_START_Y + len(unit_names) * CHECKBOX_GAP + 20
 BUTTON_X2 = BUTTON_X1 + 300
 BUTTON_Y2 = BUTTON_Y1 + 40
 
-# Positions for the "Wait for Zero Position Signal" checkbox
+# Adjust coordinates for the "Sync All Clocks" button
+SYNC_BUTTON_Y1 = BUTTON_Y2 + 20
+SYNC_BUTTON_Y2 = SYNC_BUTTON_Y1 + 40
+
+# Adjust coordinates for the "Encoders Section"
+ZERO_ENCODER_TITLE_Y = SYNC_BUTTON_Y2 + 65
+
 WAIT_CHECKBOX_X = BUTTON_X1
-WAIT_CHECKBOX_Y = BUTTON_Y2 + 30
+WAIT_CHECKBOX_Y = ZERO_ENCODER_TITLE_Y + 20
 WAIT_CHECKBOX_SIZE = 20
 
-# Adjust ZERO_BUTTON_Y1 and ZERO_BUTTON_Y2 for the zero button
-ZERO_BUTTON_Y1 = WAIT_CHECKBOX_Y + WAIT_CHECKBOX_SIZE + 20
+ZERO_BUTTON_Y1 = WAIT_CHECKBOX_Y + WAIT_CHECKBOX_SIZE + 15
 ZERO_BUTTON_Y2 = ZERO_BUTTON_Y1 + 40
 
-# Adjust coordinates for the new "Sync All Clocks" button
-SYNC_BUTTON_Y1 = ZERO_BUTTON_Y2 + 20
-SYNC_BUTTON_Y2 = SYNC_BUTTON_Y1 + 40
+# "Data Recording Section" coordinates
+DATA_RECORDING_TITLE_Y = ZERO_BUTTON_Y2 + 60
+FILENAME_BOX_X1 = BUTTON_X1
+FILENAME_BOX_Y1 = DATA_RECORDING_TITLE_Y + 20
+FILENAME_BOX_X2 = FILENAME_BOX_X1 + 355
+FILENAME_BOX_Y2 = FILENAME_BOX_Y1 + 40
+
+RECORD_BUTTON_Y1 = FILENAME_BOX_Y2 + 20
+RECORD_BUTTON_Y2 = RECORD_BUTTON_Y1 + 40
+
+INFO_BOX_X1 = BUTTON_X1
+INFO_BOX_Y1 = RECORD_BUTTON_Y2 + 20
+INFO_BOX_X2 = FILENAME_BOX_X1 + 355
+INFO_BOX_Y2 = INFO_BOX_Y1 + 70 + 27*len(unit_names)
 
 # Constants for image dimensions
 IMG_WIDTH = CHECKBOX_START_X + 370
@@ -157,7 +191,7 @@ def create_unit_lines(data_dict, unit_number):
         
         time_since_sync = int(press['time_since_sync'])
         if time_since_sync < 0:
-            lines.append(f" Time Since Sync: Err(Neg. Vl.)")
+            lines.append(" Time Since Sync: Err(Neg. Vl.)")
         else:
             hours = time_since_sync // 3600
             minutes = (time_since_sync % 3600) // 60
@@ -167,7 +201,7 @@ def create_unit_lines(data_dict, unit_number):
         if abs(int(press['difference'])) < print_range:
             lines.append(f" RTC Diff:   {press['difference']}ms")
         else:
-            lines.append(f" RTC Diff:   Err(Out of Range)")
+            lines.append(" RTC Diff:   Err(Out of Range)")
 
     if data_dict != {}:
         if time_diff is not None:
@@ -196,7 +230,7 @@ def create_unit_lines(data_dict, unit_number):
     return lines
 
 def create_data_image(data_dicts):
-    global ref_unit_time
+    global ref_unit_time, input_box_text, recording_filename, recording, recording_start_time, recording_units
 
     # Create a black image
     img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
@@ -232,14 +266,8 @@ def create_data_image(data_dicts):
         
         # If selected, draw a tick
         if units_selected[idx]:
-            cv2.line(img, 
-                     (top_left[0], top_left[1]),
-                     (bottom_right[0], bottom_right[1]),
-                     (0, 255, 0), 2)
-            cv2.line(img,
-                     (top_left[0], bottom_right[1]),
-                     (bottom_right[0], top_left[1]),
-                     (0, 255, 0), 2)
+            cv2.line(img, (top_left[0], top_left[1]), (bottom_right[0], bottom_right[1]), (0, 255, 0), 2)
+            cv2.line(img, (top_left[0], bottom_right[1]), (bottom_right[0], top_left[1]), (0, 255, 0), 2)
         
         # Draw unit name with index
         text_position = (bottom_right[0] + 10, top_left[1] + CHECKBOX_SIZE - 5)
@@ -252,21 +280,25 @@ def create_data_image(data_dicts):
     cv2.putText(img, "Reboot Selected", (BUTTON_X1 + 20, BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (255, 255, 255), 2)
     
+    # Draw "Sync All Clocks" button
+    sync_button_color = (70, 70, 70) if not button_pressed else (0, 0, 255)
+    cv2.rectangle(img, (BUTTON_X1, SYNC_BUTTON_Y1), (BUTTON_X2, SYNC_BUTTON_Y2), sync_button_color, -1)
+    cv2.putText(img, "Sync All Clocks", (BUTTON_X1 + 20, SYNC_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
+                1, (255, 255, 255), 2)
+    
+    # Draw "Encoders" title
+    cv2.putText(img, "Encoders", (BUTTON_X1, ZERO_ENCODER_TITLE_Y), cv2.FONT_HERSHEY_SIMPLEX,
+                1, (255, 255, 255), 2)
+    cv2.line(img, (BUTTON_X1, ZERO_ENCODER_TITLE_Y + 3), (BUTTON_X1 + 142, ZERO_ENCODER_TITLE_Y + 3), (255, 255, 255), 1)
+
     # Draw "Wait for Zero Position Signal" checkbox
     checkbox_top_left = (WAIT_CHECKBOX_X, WAIT_CHECKBOX_Y)
     checkbox_bottom_right = (checkbox_top_left[0] + WAIT_CHECKBOX_SIZE, checkbox_top_left[1] + WAIT_CHECKBOX_SIZE)
     cv2.rectangle(img, checkbox_top_left, checkbox_bottom_right, (255, 255, 255), 2)
     
-    # If selected, draw a tick
     if wait_for_zero_position_selected:
-        cv2.line(img,
-                 (checkbox_top_left[0], checkbox_top_left[1]),
-                 (checkbox_bottom_right[0], checkbox_bottom_right[1]),
-                 (0, 255, 0), 2)
-        cv2.line(img,
-                 (checkbox_top_left[0], checkbox_bottom_right[1]),
-                 (checkbox_bottom_right[0], checkbox_top_left[1]),
-                 (0, 255, 0), 2)
+        cv2.line(img, (checkbox_top_left[0], checkbox_top_left[1]), (checkbox_bottom_right[0], checkbox_bottom_right[1]), (0, 255, 0), 2)
+        cv2.line(img, (checkbox_top_left[0], checkbox_bottom_right[1]), (checkbox_bottom_right[0], checkbox_top_left[1]), (0, 255, 0), 2)
     
     # Draw the label next to the checkbox
     text_position = (checkbox_bottom_right[0] + 10, checkbox_top_left[1] + WAIT_CHECKBOX_SIZE - 5)
@@ -279,13 +311,55 @@ def create_data_image(data_dicts):
     cv2.putText(img, "Zero Selected", (BUTTON_X1 + 20, ZERO_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (255, 255, 255), 2)
     
-    # Draw "Sync All Clocks" button
-    sync_button_color = (70, 70, 70) if not button_pressed else (0, 0, 255)
-    cv2.rectangle(img, (BUTTON_X1, SYNC_BUTTON_Y1), (BUTTON_X2, SYNC_BUTTON_Y2), sync_button_color, -1)
-    cv2.putText(img, "Sync All Clocks", (BUTTON_X1 + 20, SYNC_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
+    # Data Recording Section
+    cv2.putText(img, "Data Recording", (BUTTON_X1, DATA_RECORDING_TITLE_Y), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (255, 255, 255), 2)
+    cv2.line(img, (BUTTON_X1, DATA_RECORDING_TITLE_Y + 3), (BUTTON_X1 + 240, DATA_RECORDING_TITLE_Y + 3), (255, 255, 255), 1)
     
+    # Filename input box
+    # Draw box
+    filename_box_color = (0, 255, 0) if input_box_focused else (255, 255, 255)
+    cv2.rectangle(img, (FILENAME_BOX_X1, FILENAME_BOX_Y1), (FILENAME_BOX_X2, FILENAME_BOX_Y2), filename_box_color, 2)
+    # Show text
+    display_text = input_box_text if input_box_text else "recording name..."
+    text_color = (255, 255, 255) if input_box_text else (80, 80, 80)  # White if text exists, gray otherwise
+    cv2.putText(img, display_text, (FILENAME_BOX_X1 + 10, FILENAME_BOX_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
+                0.7, text_color, 2)
+    
+    # Start/Stop Recording button
+    record_button_color = (70, 70, 70) if not recording else (0, 0, 255)
+    cv2.rectangle(img, (BUTTON_X1, RECORD_BUTTON_Y1), (BUTTON_X2, RECORD_BUTTON_Y2), record_button_color, -1)
+    record_button_text = "Stop Recording..." if recording else "Start Recording"
+    cv2.putText(img, record_button_text, (BUTTON_X1 + 20, RECORD_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
+                1, (255, 255, 255), 2)
+
+    # Info box if recording
+    cv2.rectangle(img, (INFO_BOX_X1, INFO_BOX_Y1), (INFO_BOX_X2, INFO_BOX_Y2), (255, 255, 255), 2)
+    if recording and recording_start_time:
+        elapsed = datetime.now() - recording_start_time
+        hours = elapsed.seconds // 3600
+        minutes = (elapsed.seconds % 3600) // 60
+        seconds = (elapsed.seconds % 60)
+        time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+        cv2.putText(img, f"Recording Time: {time_str}", (INFO_BOX_X1 + 10, INFO_BOX_Y1 + 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+        units_str = "\n".join([unit_names[u] for u in recording_units])
+        multiline_putText(img, f"Units:\n{units_str}", (INFO_BOX_X1 + 10, INFO_BOX_Y1 + 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+    else:
+        cv2.putText(img, f"Not Recording", (INFO_BOX_X1 + 10, INFO_BOX_Y1 + 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+        multiline_putText(img, recording_last_filename, (INFO_BOX_X1 + 10, INFO_BOX_Y1 + 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+
     return img
+
+def multiline_putText(img, text, position, font, font_scale, color, thickness, line_spacing=25):
+    x, y = position
+    for line in text.split('\n'):
+        cv2.putText(img, line, (x, y), font, font_scale, color, thickness)
+        y += line_spacing
 
 def udp_listener():
     global received_data
@@ -302,7 +376,21 @@ def udp_listener():
 
 def mouse_callback(event, x, y, flags, param):
     global button_pressed, button_press_time, units_selected, wait_for_zero_position_selected
+    global input_box_focused, recording, recording_filename, input_box_text, recording_units
+    global recording_start_time, last_recording_save_time, recording_data_buffer, recording_timestamp, recording_last_filename, save_filepath
+
     if event == cv2.EVENT_LBUTTONUP:
+        # If clicked inside filename box
+        if (FILENAME_BOX_X1 <= x <= FILENAME_BOX_X2 and FILENAME_BOX_Y1 <= y <= FILENAME_BOX_Y2):
+            if not input_box_text:
+                input_box_text = ""
+            input_box_focused = True
+            return
+
+        # If clicked outside filename box, unfocus if currently focused
+        if not (FILENAME_BOX_X1 <= x <= FILENAME_BOX_X2 and FILENAME_BOX_Y1 <= y <= FILENAME_BOX_Y2):
+            input_box_focused = False
+
         # Check if click is inside any checkbox
         for idx in range(len(unit_names)):
             top_left = (CHECKBOX_START_X, CHECKBOX_START_Y + idx * CHECKBOX_GAP)
@@ -335,7 +423,55 @@ def mouse_callback(event, x, y, flags, param):
         elif BUTTON_X1 <= x <= BUTTON_X2 and SYNC_BUTTON_Y1 <= y <= SYNC_BUTTON_Y2:
             selected_units = list(range(len(unit_names))) # Automatically select all units
             command_dict = {"units": selected_units, "command": "sync"}
-        
+       
+        # Check if click is inside "Start/Stop Recording" button
+        elif BUTTON_X1 <= x <= BUTTON_X2 and RECORD_BUTTON_Y1 <= y <= RECORD_BUTTON_Y2:
+            # If currently recording, stop
+            if recording:
+                # finalize recording
+                # flush buffer
+                if recording_data_buffer:
+                    try:
+                        with open(save_filepath, 'a') as f:
+                            for entry in recording_data_buffer:
+                                f.write(json.dumps(entry) + "\n")
+                        recording_data_buffer = []
+                    except Exception as e:
+                        print("Error writing final data to file:", e)
+                recording = False
+                print("Stopped recording.")
+            else:
+                # start recording if units selected
+                if selected_units:
+                    recording = True
+                    now = datetime.now()
+                    recording_timestamp = now.strftime('%m-%d@%H-%M')
+                    recording_units = selected_units.copy()
+                    recording_start_time = datetime.now()
+                    last_recording_save_time = datetime.now()
+                    recording_data_buffer = []
+                    recording_filename = input_box_text if input_box_text else default_filename
+                    save_filepath = os.path.join(recording_folder, f"{recording_filename} - {recording_timestamp}.json")
+                    print(f"Started recording to '{recording_filename} - {recording_timestamp}.json', units: {recording_units}")
+                    
+                    # Check if there is a file with the given name, if not create it
+                    try:
+                        with open(save_filepath, 'x') as f:
+                            pass
+                    except FileExistsError:
+                        pass
+
+                    # Split the temp_text into multiple lines if it exceeds the char_turnover limit
+                    temp_text = f"'{recording_filename} - {recording_timestamp}.json'"
+                    char_turnover = 25 # Number of characters before splitting text
+                    loops = 0
+                    while len(temp_text[char_turnover*loops:]) > char_turnover:
+                        loops += 1
+                        temp_text = temp_text[:char_turnover*loops] + "\n" + temp_text[char_turnover*loops:]
+                    recording_last_filename = "Saved recording to:\n" + temp_text
+                else:
+                    print("No units selected, cannot start recording.")
+
         # Send command if button was pressed and units are selected
         if command_dict and selected_units != []:
             button_pressed = True
@@ -365,53 +501,97 @@ cv2.resizeWindow("Sensor Data", IMG_WIDTH, IMG_HEIGHT)
 # Set mouse callback function
 cv2.setMouseCallback("Sensor Data", mouse_callback)
 
+
 # Main loop
 try:
     while True:
+        # Handle keyboard input for filename if focused
+        key = cv2.waitKey(1) & 0xFF
+        if input_box_focused:
+            if key == 13:  # ENTER key
+                input_box_focused = False
+            elif key == 8:  # BACKSPACE
+                input_box_text = input_box_text[:-1]
+            elif key != 255 and key not in [27, 9, 10, 13, 8]:
+                input_box_text += chr(key)
+
+        new_data = None
         with data_lock:
             if received_data:
-                addr, data = received_data
-                try:
-                    data_dict = json.loads(data)
-                    unit_num_str = data_dict.get("mpu_unit")
-                    if unit_num_str is None:
-                        print("Warning: 'mpu_unit' key missing in data")
-                        unit_num = -1  # Invalid unit number
-                    else:
-                        unit_num = int(unit_num_str)
-
-                    if 0 <= unit_num < len(data_dicts):
-                        data_dicts[unit_num] = data_dict
-                        last_received_times[unit_num] = datetime.now().timestamp()
-                    else:
-                        print(f"Warning: Invalid unit number received: {unit_num}")
-                except Exception as e:
-                    print(f"\nException occurred during data processing: {e}")
-                    print(f"Received data:\n{data}")
+                addr, new_data = received_data
                 received_data = None
         
+        if new_data:
+            # Process incoming data
+            try:
+                data_dict = json.loads(new_data)
+                unit_num_str = data_dict.get("mpu_unit")
+                if unit_num_str is None:
+                    print("Warning: 'mpu_unit' key missing in data")
+                else:
+                    unit_num = int(unit_num_str)
+
+                    if 0 <= unit_num < len(data_dicts):
+                        data_dict["mpu_unit"] = unit_num
+                        data_dicts[unit_num] = data_dict
+                        last_received_times[unit_num] = datetime.now().timestamp()
+                        
+                        # If recording and this unit is being recorded, append data directly to buffer
+                        if recording and (unit_num in recording_units):
+                            # Add a timestamp field for local recording time
+                            data_dict = {"mpu_unit": unit_num, "local_recv_time": datetime.now().isoformat(), **data_dict}
+                            recording_data_buffer.append(data_dict)
+                    else:
+                        print(f"Warning: Invalid unit number received: {unit_num}")
+            except Exception as e:
+                print(f"\nException occurred during data processing: {e}")
+                print(f"Received data:\n{new_data}")
+
         # Clear data for units that haven't sent data in the last few seconds
-        current_time = datetime.now().timestamp()
         for unit_num in range(len(unit_names)):
-            if current_time - last_received_times[unit_num] > 5.0:
+            if datetime.now().timestamp() - last_received_times[unit_num] > 5.0:
                 data_dicts[unit_num] = {}
                 time_diff_history[unit_num] = []
+
+        # Every 10 seconds, if recording, flush buffer to file
+        if recording and (datetime.now() - last_recording_save_time).total_seconds() >= recording_interval:
+            if recording_data_buffer:
+                try:
+                    with open(save_filepath, 'a') as f:
+                        for entry in recording_data_buffer:
+                            f.write(json.dumps(entry) + "\n")
+                    recording_data_buffer = []
+                except Exception as e:
+                    print("Error writing to file:", e)
+            
+            last_recording_save_time = datetime.now()
 
         # Create and show image
         img = create_data_image(data_dicts)
         cv2.imshow("Sensor Data", img)
         
-        # Check if button was pressed and change color back after 1 second
+        # Check if button was pressed and reset color after 0.5 second
         if button_pressed and (datetime.now() - button_press_time).total_seconds() > 0.5:
             button_pressed = False
         
-        # Check for window close
-        if cv2.waitKey(1) & 0xFF == 27:  # 27 = ASCII code for the ESC key
+        # Check for window close (ESC)
+        if key == 27:  # ESC key
             break
 
 except KeyboardInterrupt:
     print("Main thread exiting...")
 finally:
+    if recording_data_buffer:
+        print("Flushing remaining recording data to file...")
+        try:
+            with open(save_filepath, 'a') as f:
+                for entry in recording_data_buffer:
+                    f.write(json.dumps(entry) + "\n")
+            recording_data_buffer = []
+        except Exception as e:
+            print("Error writing to file:", e)
+
+    print("Exiting...")
     stop_threads = True
     udp_thread.join()
     cv2.destroyAllWindows()

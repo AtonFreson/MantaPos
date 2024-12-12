@@ -11,13 +11,13 @@
 #include <EEPROM.h>
 
 // The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Main", 2:"Z-axis Encoder - Second", 3:"Surface Pressure Sensor" 
-#define MPU_UNIT 1
+#define MPU_UNIT 0
 
 // Features available on this unit
 #define HAS_CLOCK       1
 #define HAS_ENCODER     1
-#define HAS_IMU         0
-#define HAS_PRESSURE    0
+#define HAS_IMU         1
+#define HAS_PRESSURE    1
 
 // Pin definitions for SCA50 differential signals
 #define ENCODER_PIN_A_POS 14  // A
@@ -189,6 +189,7 @@ private:
 SerialWrapper SerialW;
 
 uint64_t getEpochMillis64(bool difference = false) {
+#if HAS_CLOCK
     // If there is a valid PTP lock, return that time
     uint64_t millis_comp = 0;
 
@@ -200,11 +201,12 @@ uint64_t getEpochMillis64(bool difference = false) {
         }
     }
 
-#if HAS_CLOCK
     DateTime now = RTClib::now();
     noInterrupts();
     shiftNs = esp_timer_get_time() * 1000ULL - localSecondOffsetNs;
     interrupts();
+    // ShiftNs is the time since the last second, in nanoseconds, it shouldn't be negative or more than a second
+    if (shiftNs < 0) {shiftNs = 0;} else if (shiftNs > 1000000000ULL) {shiftNs = 999999999ULL;}    
 
     if (difference) {
         return 500000000ULL + (int64_t)(millis_comp - (((uint64_t)now.unixtime() * 1000ULL) + shiftNs / 1000000ULL)) + storedOffset / 1000000ULL;
