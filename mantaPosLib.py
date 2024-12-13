@@ -528,6 +528,8 @@ def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera
 
     # Apply the overlay
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    
+    return position, position_std, rotation, rotation_std
 
 # Class to read frames from an RTSP camera stream, with minimal buffering for real-time applications. Wrapper around OpenCV's VideoCapture class.
 # Set timestamp=True to read the timestamp along with the frame.

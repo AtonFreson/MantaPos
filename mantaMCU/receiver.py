@@ -16,14 +16,14 @@ COMMAND_PORT = 13234  # Port for sending commands
 # Create a UDP socket for receiving data
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind((UDP_IP, UDP_PORT))
-sock.settimeout(1.0)  # Set a timeout of 1 second
+sock.settimeout(1.0)
 
 # Create a UDP socket for sending commands
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
 # List of unit names (can be edited)
-unit_names = ["X-axis Encoder", "Z-axis Encoder - Main", "Z-axis Encoder - Second", "Surface Pressure Sensor"]
+unit_names = ["X-axis Encoder", "Z-axis Encoder - Main", "Z-axis Encoder - Second", "Surface Pressure Sensor", "mantaPos Positioning"]
 units_selected = [False] * len(unit_names)
 # list of all data dicts, one for each unit
 data_dicts = [{} for _ in range(len(unit_names))]
@@ -203,6 +203,18 @@ def create_unit_lines(data_dict, unit_number):
         else:
             lines.append(" RTC Diff:   Err(Out of Range)")
 
+    if "camera" in data_dict:
+        cam = data_dict["camera"]
+        lines.append("Camera Data:")
+        lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
+        lines.append(f" Position: {cam['position']}")
+        lines.append(f" Position Std: {cam['position_std']}")
+        lines.append(f" Rotation: {cam['rotation']}")
+        lines.append(f" Rotation Std: {cam['rotation_std']}")
+        lines.append("")
+
+
     if data_dict != {}:
         if time_diff is not None:
             # Store time_diff in the history for this unit
@@ -228,6 +240,12 @@ def create_unit_lines(data_dict, unit_number):
             lines.append(f" Unit {ref_unit} Diff: N/A")
     
     return lines
+
+def multiline_putText(img, text, position, font, font_scale, color, thickness, line_spacing=25):
+    x, y = position
+    for line in text.split('\n'):
+        cv2.putText(img, line, (x, y), font, font_scale, color, thickness)
+        y += line_spacing
 
 def create_data_image(data_dicts):
     global ref_unit_time, input_box_text, recording_filename, recording, recording_start_time, recording_units
@@ -317,10 +335,8 @@ def create_data_image(data_dicts):
     cv2.line(img, (BUTTON_X1, DATA_RECORDING_TITLE_Y + 3), (BUTTON_X1 + 240, DATA_RECORDING_TITLE_Y + 3), (255, 255, 255), 1)
     
     # Filename input box
-    # Draw box
     filename_box_color = (0, 255, 0) if input_box_focused else (255, 255, 255)
     cv2.rectangle(img, (FILENAME_BOX_X1, FILENAME_BOX_Y1), (FILENAME_BOX_X2, FILENAME_BOX_Y2), filename_box_color, 2)
-    # Show text
     display_text = input_box_text if input_box_text else "recording name..."
     text_color = (255, 255, 255) if input_box_text else (80, 80, 80)  # White if text exists, gray otherwise
     cv2.putText(img, display_text, (FILENAME_BOX_X1 + 10, FILENAME_BOX_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
@@ -355,17 +371,11 @@ def create_data_image(data_dicts):
 
     return img
 
-def multiline_putText(img, text, position, font, font_scale, color, thickness, line_spacing=25):
-    x, y = position
-    for line in text.split('\n'):
-        cv2.putText(img, line, (x, y), font, font_scale, color, thickness)
-        y += line_spacing
-
 def udp_listener():
     global received_data
     while not stop_threads:
         try:
-            data, addr = sock.recvfrom(1024)
+            data, addr = sock.recvfrom(4096)
             with data_lock:
                 received_data = (addr, data.decode())
         except socket.timeout:
@@ -402,7 +412,7 @@ def mouse_callback(event, x, y, flags, param):
         
         # Check if click is inside "Wait for Index Position Signal" checkbox
         if (WAIT_CHECKBOX_X <= x <= WAIT_CHECKBOX_X + WAIT_CHECKBOX_SIZE and
-              WAIT_CHECKBOX_Y <= y <= WAIT_CHECKBOX_Y + WAIT_CHECKBOX_SIZE):
+            WAIT_CHECKBOX_Y <= y <= WAIT_CHECKBOX_Y + WAIT_CHECKBOX_SIZE):
 
             wait_for_zero_position_selected = not wait_for_zero_position_selected
             print(f"Wait for Index Position Signal {'selected' if wait_for_zero_position_selected else 'deselected'}")
@@ -428,8 +438,7 @@ def mouse_callback(event, x, y, flags, param):
         elif BUTTON_X1 <= x <= BUTTON_X2 and RECORD_BUTTON_Y1 <= y <= RECORD_BUTTON_Y2:
             # If currently recording, stop
             if recording:
-                # finalize recording
-                # flush buffer
+                # finalize recording and flush buffer
                 if recording_data_buffer:
                     try:
                         with open(save_filepath, 'a') as f:
@@ -539,7 +548,7 @@ try:
                         # If recording and this unit is being recorded, append data directly to buffer
                         if recording and (unit_num in recording_units):
                             # Add a timestamp field for local recording time
-                            data_dict = {"mpu_unit": unit_num, "local_recv_time": datetime.now().isoformat(), **data_dict}
+                            data_dict = {"mpu_unit": unit_num, "recv_time": datetime.now().isoformat(), **data_dict}
                             recording_data_buffer.append(data_dict)
                     else:
                         print(f"Warning: Invalid unit number received: {unit_num}")
@@ -575,7 +584,7 @@ try:
             button_pressed = False
         
         # Check for window close (ESC)
-        if key == 27:  # ESC key
+        if key == 27:
             break
 
 except KeyboardInterrupt:
