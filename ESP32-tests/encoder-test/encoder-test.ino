@@ -11,12 +11,11 @@
 #define INDEX_PIN_Z_NEG 36    // Z-
  
 // Encoder configuration
-#define MMPP 0.105  // mm per pulse. For linear sensors. Overwrites rotational measurements (e.g. PPR), set to 0 to use PPR.
+#define MPP_QUAD 0.00002623332163  // m per pulse. For linear sensors. Overwrites rotational measurements (e.g. PPR), set to 0 to use PPR.
 
 #define PPR 400  // Pulses Per Revolution
 #define WHEEL_DIAMETER_MM 82.53
 
-#define MMPP_QUAD (MMPP * 4)  // In quadrature mode
 #define COUNTS_PER_REV (PPR * 4)  // In quadrature mode
 #define DISTANCE_PER_REV (WHEEL_DIAMETER_MM * PI / 1000.0)  // meters per revolution
 #define DISTANCE_PER_COUNT (DISTANCE_PER_REV / COUNTS_PER_REV)
@@ -120,7 +119,7 @@ void IRAM_ATTR encoderISR() {
     uint8_t index = (lastState << 2) | currentState;
     
     // Update count based on state transition
-    encoderCount += lookup_table[index];
+    encoderCount -= lookup_table[index];
     
     // Save current state for next iteration
     lastState = currentState;
@@ -182,7 +181,7 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(INDEX_PIN_Z_POS), indexISR, RISING);
     
     delay(1000); // Wait a bit for serial connection to be established
-    if (MMPP_QUAD) {
+    if (MPP_QUAD) {
         SerialW.println("\nWDS-7500-P115 Wire Sensor Test");
         SerialW.println("Resolution: ±0.03mm & ±0.02% FSO\n");
     } else {
@@ -202,6 +201,7 @@ void setup() {
     while (!ETH.linkUp()) {
         SerialW.println("Waiting for Ethernet connection...");
         delay(1000);
+        break;
     }
 
     udp.begin(udpPort);  // Set the source port to 13233
@@ -218,7 +218,7 @@ void loop() {
     if (resetOccurred) {
         Serial.println("Encoder count reset.");
         resetOccurred = false; // Clear the reset occurred flag
-        resetCommandReceived = true;
+        resetCommandReceived = false;
     }
 
     unsigned long currentTime = millis();
@@ -256,8 +256,8 @@ void loop() {
         if (currentCount != lastEncoderCount && timeDelta > 0) {
             float revolutions = (float)currentCount / COUNTS_PER_REV;
             float dist_count = DISTANCE_PER_COUNT;
-            if (MMPP_QUAD) {
-                float dist_count = MMPP_QUAD;
+            if (MPP_QUAD) {
+                dist_count = MPP_QUAD;
             }
             float distance = currentCount * dist_count;
 
@@ -266,10 +266,14 @@ void loop() {
             float rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
             float speed_m_per_s = countsPerSec * dist_count;
 
+            SerialW.print("Pul: ");
+            SerialW.print(currentCount);
+            SerialW.print("  ");
+            
             char buffer[150];
             snprintf(buffer, sizeof(buffer), 
                     "Rev: %8.3f  RPM: %8.3f  Speed (m/s): %8.3f  Dist (m): %9.4f", 
-                    revolutions, rpm, speed_m_per_s, distance);
+                    revolutions, rpm, speed_m_per_s, distance+0.4165);
             SerialW.println(buffer);
 
             // Prepare UDP packet

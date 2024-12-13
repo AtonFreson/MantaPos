@@ -530,7 +530,8 @@ try:
                     print("Warning: 'mpu_unit' key missing in data")
                 else:
                     unit_num = int(unit_num_str)
-
+                    
+                    # Check if unit number is valid
                     if 0 <= unit_num < len(data_dicts):
                         data_dict["mpu_unit"] = unit_num
                         data_dicts[unit_num] = data_dict
