@@ -12,7 +12,7 @@ import time
 # Set the selected camera: '4K', 'gopro' or 'axis'.
 CAMERA_TYPE = "4K"
 CAMERA_INPUT = 3  # Camera index if the source is webcam-based
-CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.56.12:554/" # Overwrites CAMERA_INPUT if 4K selected
+CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 # ChArUco board settings
 squares_vertically = 6

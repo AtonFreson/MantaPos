@@ -534,6 +534,7 @@ try:
             # Process incoming data
             try:
                 data_dict = json.loads(new_data)
+                #print(f"Received data:\n{new_data}")
                 unit_num_str = data_dict.get("mpu_unit")
                 if unit_num_str is None:
                     print("Warning: 'mpu_unit' key missing in data")

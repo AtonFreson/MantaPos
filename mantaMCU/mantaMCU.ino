@@ -11,13 +11,13 @@
 #include <EEPROM.h>
 
 // The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Main", 2:"Z-axis Encoder - Second", 3:"Surface Pressure Sensor" 
-#define MPU_UNIT 0
+#define MPU_UNIT 1
 
 // Features available on this unit
 #define HAS_CLOCK       1
 #define HAS_ENCODER     1
-#define HAS_IMU         1
-#define HAS_PRESSURE    1
+#define HAS_IMU         0
+#define HAS_PRESSURE    0
 
 // Pin definitions for SCA50 differential signals
 #define ENCODER_PIN_A_POS 14  // A
@@ -38,11 +38,22 @@
 byte itr_freq = 0x00;
 
 // Encoder configuration
-#define PPR 400  // Pulses Per Revolution
-#define COUNTS_PER_REV (PPR * 4)  // In quadrature mode
+#if MPU_UNIT == 1
+#define DISTANCE_PER_COUNT 0.00002625352510  // meter per count. For linear sensors.
 #define WHEEL_DIAMETER_MM 82.53
-#define DISTANCE_PER_REV (WHEEL_DIAMETER_MM * PI / 1000.0)  // meters per revolution
-#define DISTANCE_PER_COUNT (DISTANCE_PER_REV / COUNTS_PER_REV)
+#define COUNTS_PER_REV (WHEEL_DIAMETER_MM * PI / 1000.0 / DISTANCE_PER_COUNT)
+
+#elif MPU_UNIT == 2
+#define DISTANCE_PER_COUNT 0.00002626184728  // meter per count. For linear sensors.
+#define WHEEL_DIAMETER_MM 82.53
+#define COUNTS_PER_REV (WHEEL_DIAMETER_MM * PI / 1000.0 / DISTANCE_PER_COUNT)
+
+#else
+#define PPR 400  // Pulses Per Revolution
+#define WHEEL_DIAMETER_MM 82.53
+#define COUNTS_PER_REV (PPR * 4)  // In quadrature mode
+#define DISTANCE_PER_COUNT (WHEEL_DIAMETER_MM * PI / 1000.0 / COUNTS_PER_REV)
+#endif
 
 #if HAS_ENCODER
 volatile long encoderCount = 0;
@@ -463,12 +474,17 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A_POS), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B_POS), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(INDEX_PIN_Z_POS), indexISR, RISING);
+    
+    delay(1000); // Wait a bit for serial connection to be established
+    if (MPU_UNIT == 0) {
+        SerialW.println("\nSCA50-400 Encoder Test");
+        SerialW.println("PPR: 400");
+        SerialW.println("Resolution: ±0.10mm\n");
+    } else {
+        SerialW.println("\nWDS-7500-P115 Wire Sensor Test");
+        SerialW.println("Resolution: ±0.03mm & ±0.02% FSO\n");
+    }
 #endif
-
-    //delay(1000); // Wait a bit for serial connection to be established
-    //SerialW.println("\nSCA50-400 Encoder Test");
-    //SerialW.println("PPR: 400");
-    //SerialW.println("Resolution: ±0.10mm\n");
 
     // Initialize Ethernet and register event handler
     WiFi.onEvent(WiFiEvent);

@@ -14,7 +14,7 @@ import json
 # Set the selected camera: '4K', 'gopro' or 'axis'.
 CAMERA_TYPE = "4K"
 CAMERA_INPUT = 3  # Camera index if the source is webcam-based
-CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.56.12:554/" # Overwrites CAMERA_INPUT if 4K selected
+CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
 
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 
@@ -199,8 +199,8 @@ while True:
                 "timestamp": int(datetime.now().timestamp() * 1000),
                 "position": position.tolist(),
                 "position_std": position_std.tolist(),
-                "speed": rotation.tolist(),
-                "distance": rotation_std.tolist()
+                "rotation": rotation.tolist(),
+                "rotation_std": rotation_std.tolist()
             }
         }
         sock.sendto(json.dumps(json_data).encode(), (UDP_IP, UDP_PORT))
