@@ -1,0 +1,19 @@
+{
+    "sensor_type": "adc_value0",
+    "model_name": "TheilSen",
+    "model_params": {
+        "copy_X": "deprecated",
+        "fit_intercept": true,
+        "max_iter": 300,
+        "max_subpopulation": 10000.0,
+        "n_jobs": null,
+        "n_subsamples": null,
+        "random_state": 42,
+        "tol": 0.001,
+        "verbose": false
+    },
+    "coefficients": [
+        -0.0030974633080241595
+    ],
+    "intercept": 11.389768645431435
+}

@@ -47,7 +47,7 @@ if os.path.exists(snapshot_dir):
 os.makedirs(snapshot_dir)
 
 # Prepare to save the created calibration file
-calibration_dir = './camera_calibrations'
+calibration_dir = './calibrations/camera_calibrations'
 if not os.path.exists(calibration_dir):
     os.makedirs(calibration_dir)
 
