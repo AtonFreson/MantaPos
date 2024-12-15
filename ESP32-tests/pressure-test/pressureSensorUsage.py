@@ -7,10 +7,9 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 from sklearn.linear_model import RANSACRegressor
 import xgboost as xgb
-from scipy.interpolate import UnivariateSpline
+from scipy.interpolate import BSpline
 
 class PressureSensorSystem:
     def __init__(self, surface_sensor_depth=0.02):
@@ -19,8 +18,9 @@ class PressureSensorSystem:
         self.sensor2_model = None
         self.reference_surface_pressure = None
         
-    def load_calibration(self, sensor1_file='sensor1_calibration.json', 
-                        sensor2_file='sensor2_calibration.json'):
+    def load_calibration(self, 
+                         sensor1_file='calibrations/pressure_calibrations/pressure1_calibration.json', 
+                         sensor2_file='calibrations/pressure_calibrations/pressure2_calibration.json'):
         """Load calibration parameters for both sensors."""
         try:
             # Load sensor 1 calibration
@@ -32,8 +32,8 @@ class PressureSensorSystem:
                 sensor2_cal = json.load(f)
             
             # Initialize models based on calibration data
-            self.sensor1_model = self._initialize_model(sensor1_cal)
-            self.sensor2_model = self._initialize_model(sensor2_cal)
+            self.sensor1_model = self.initialize_model(sensor1_cal)
+            self.sensor2_model = self.initialize_model(sensor2_cal)
             
             return True
             
@@ -41,45 +41,53 @@ class PressureSensorSystem:
             print(f"Error loading calibration: {str(e)}")
             return False
     
-    def _initialize_model(self, calibration_data):
+    def initialize_model(self, calibration_data):
         """Initialize a model with saved parameters."""
         model_name = calibration_data['model_name']
-        model_params = calibration_data.get('model_params', {})
         
-        # Create appropriate model based on name
+        # Mapping model names to classes
         model_map = {
-            'Linear': LinearRegression(),
-            'Ridge': Ridge(),
-            'Lasso': Lasso(),
-            'ElasticNet': ElasticNet(),
-            'SVR': SVR(),
-            'DecisionTree': DecisionTreeRegressor(),
-            'RandomForest': RandomForestRegressor(),
-            'GradientBoosting': GradientBoostingRegressor(),
-            'XGBoost': xgb.XGBRegressor(),
-            'MLP': MLPRegressor(),
-            'KNN': KNeighborsRegressor(),
-            'GaussianProcess': GaussianProcessRegressor(),
-            'RANSAC': RANSACRegressor(),
-            'TheilSen': TheilSenRegressor(),
-            'Spline3': UnivariateSpline
+            'Linear': LinearRegression,
+            'Ridge': Ridge,
+            'Lasso': Lasso,
+            'ElasticNet': ElasticNet,
+            'SVR': SVR,
+            'DecisionTree': DecisionTreeRegressor,
+            'RandomForest': RandomForestRegressor,
+            'GradientBoosting': GradientBoostingRegressor,
+            'XGBoost': xgb.XGBRegressor,
+            'MLP': MLPRegressor,
+            'KNN': KNeighborsRegressor,
+            'GaussianProcess': GaussianProcessRegressor,
+            'RANSAC': RANSACRegressor,
+            'TheilSen': TheilSenRegressor,
+            'Spline3': None  # Will handle separately
         }
         
-        model = model_map.get(model_name)
-        if model is None:
-            raise ValueError(f"Unknown model type: {model_name}")
-        
-        # Set model parameters if available
-        if model_params and hasattr(model, 'set_params'):
-            model.set_params(**model_params)
-        
-        # Set coefficients and intercept if available
-        if 'coefficients' in calibration_data and hasattr(model, 'coef_'):
-            model.coef_ = np.array(calibration_data['coefficients'])
-        if 'intercept' in calibration_data and hasattr(model, 'intercept_'):
-            model.intercept_ = calibration_data['intercept']
-        
-        return model
+        if model_name == 'Spline3':
+            # Reconstruct the spline from knots and coefficients
+            knots = np.array(calibration_data['knots'])
+            coeffs = np.array(calibration_data['coefficients'])
+            # The calibration used k=2 for the spline
+            k = 2
+            model = BSpline(knots, coeffs, k)
+            return model
+        else:
+            # For other models
+            model_class = model_map.get(model_name)
+            if model_class is None:
+                raise ValueError(f"Unknown model type: {model_name}")
+            
+            model_params = calibration_data.get('model_params', {})
+            model = model_class(**model_params) if model_params else model_class()
+            
+            # If linear-like model, try to set coefficients and intercept
+            if 'coefficients' in calibration_data and calibration_data['coefficients'] is not None and hasattr(model, 'coef_'):
+                model.coef_ = np.array(calibration_data['coefficients'])
+            if 'intercept' in calibration_data and calibration_data['intercept'] is not None and hasattr(model, 'intercept_'):
+                model.intercept_ = calibration_data['intercept']
+            
+            return model
     
     def calibrate_surface_pressure(self, surface_sensor_value):
         """Calibrate system using current surface pressure reading."""
@@ -111,10 +119,12 @@ class PressureSensorSystem:
             # Compensate depth sensor reading for atmospheric pressure change
             compensated_depth_reading = depth_sensor_value - pressure_correction
             
-            # Calculate depth using the calibrated model
-            if isinstance(self.sensor2_model, UnivariateSpline):
+            # Determine how to get depth depending on model type
+            # If the model is callable (like a spline), just call it
+            if callable(self.sensor2_model):
                 depth = self.sensor2_model(compensated_depth_reading)
             else:
+                # Otherwise, assume a sklearn-like model
                 depth = self.sensor2_model.predict([[compensated_depth_reading]])[0]
             
             return max(0.0, depth)  # Ensure non-negative depth
@@ -139,20 +149,17 @@ def main():
         sensor_system.calibrate_surface_pressure(surface_sensor_value)
         
         # Get depth reading (in a loop during actual usage)
-        while True:
-            # These would be actual sensor readings in practice
-            current_depth_sensor_value = 2000  # Example value
-            current_surface_value = 1050  # Example value
-            
-            depth = sensor_system.get_depth(
-                current_depth_sensor_value, 
-                current_surface_value
-            )
-            
-            if depth is not None:
-                print(f"Current depth: {depth:.2f} meters")
-            
-            # Add appropriate delay here
+        # For demonstration purposes, we'll just do a single calculation here
+        current_depth_sensor_value = 2000  # Example value
+        current_surface_value = 1050       # Example value
+        
+        depth = sensor_system.get_depth(
+            current_depth_sensor_value, 
+            current_surface_value
+        )
+        
+        if depth is not None:
+            print(f"Current depth: {depth:.2f} meters")
             
     except KeyboardInterrupt:
         print("\nStopping depth measurements")

@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from datetime import datetime
 import os
+import mantaPosLib as manta
 
 # UDP socket parameters
 UDP_IP = ''           # Listen on all available network interfaces
@@ -30,8 +31,10 @@ data_dicts = [{} for _ in range(len(unit_names))]
 last_received_times = [0] * len(unit_names)
 time_diff_history = [[] for _ in range(len(unit_names))]
 
-# Data recording folder
+# Data folders
 recording_folder = "recordings"
+pressure_calib_folder = "calibrations/pressure_calibrations/"
+pressure_sensors = ["pressure1, pressure2, pressure3, pressure4"]
 
 # Shared variables and lock
 data_lock = threading.Lock()
@@ -141,7 +144,7 @@ def create_unit_lines(data_dict, unit_number):
         lines.append(f" Speed:  {enc['speed']: .5f} m/s")
         lines.append(f" Dist:    {enc['distance']: .5f} m")
         lines.append("")
-    else:
+    elif unit_number != 4:
         for i in range(7): lines.append("")
     
     if "temperature" in data_dict:
@@ -151,7 +154,7 @@ def create_unit_lines(data_dict, unit_number):
         time_diff = update_time_diff(temp['timestamp'], time_diff, unit_number)
         lines.append(f" Temperature:   {temp['value']: .2f} C")
         lines.append("")
-    else:
+    elif unit_number != 4:
         for i in range(4): lines.append("")
     
     if "pressure" in data_dict:
@@ -159,10 +162,25 @@ def create_unit_lines(data_dict, unit_number):
         lines.append("Pressure Data:")
         lines.append(f"-- Time: {int(press['timestamp'])/1000:.3f} --")
         time_diff = update_time_diff(press['timestamp'], time_diff, unit_number)
-        lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
-        lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
+        
+        for i in range(0+2*unit_number//3, 2+2*unit_number//3):
+            if not pressure_system.sensor_models[i]:
+                pressure_calib = pressure_calib_folder + pressure_sensors[i] + "_calibration.json"
+                ret = pressure_system.load_calibration(i, pressure_calib)
+                if not ret:
+                    print(f"Error loading calibration for sensor {pressure_sensors[i]}")
+                    
+            adc_value = int(press['adc_value' + i % 2])
+            depth = pressure_system.convert_raw(i, adc_value)
+            if depth is None:
+                lines.append(f" {pressure_sensors[i]} depth: Err(Calib) ({adc_value})")
+            else:
+                lines.append(f" {pressure_sensors[i]} depth: {depth}m ({adc_value})")
+        
+        #lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
+        #lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
         lines.append("")
-    else:
+    elif unit_number != 4:
         for i in range(5): lines.append("")
 
     if "imu" in data_dict:
@@ -179,7 +197,7 @@ def create_unit_lines(data_dict, unit_number):
         lines.append(f" Gyro Y:     {gyro['y']: .5f} rad/s")
         lines.append(f" Gyro Z:     {gyro['z']: .5f} rad/s")
         lines.append("")
-    else:
+    elif unit_number != 4:
         for i in range(9): lines.append("")
     
     if "ptp" in data_dict:
@@ -208,12 +226,19 @@ def create_unit_lines(data_dict, unit_number):
         lines.append("Camera Data:")
         lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
         time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
-        lines.append(f" Position: {cam['position']}")
-        lines.append(f" Position Std: {cam['position_std']}")
-        lines.append(f" Rotation: {cam['rotation']}")
-        lines.append(f" Rotation Std: {cam['rotation_std']}")
-        lines.append("")
-
+        position = cam["position"]
+        position_std = cam["position_std"]
+        rotation = cam["rotation"]
+        rotation_std = cam["rotation_std"]
+        
+        lines.append(" Position:")
+        lines.append(f"  X={position[0]: >+6.3f}m ±{position_std[0]: >6.3f}")
+        lines.append(f"  Y={position[1]: >+6.3f}m ±{position_std[1]: >6.3f}")
+        lines.append(f"  Z={position[2]: >+6.3f}m ±{position_std[2]: >6.3f}")
+        lines.append(" Rotation:")
+        lines.append(f"  Roll={rotation[0]: >+6.3f}° ±{rotation_std[0]: >6.3f}")
+        lines.append(f"  Pitch={rotation[1]: >+6.3f}° ±{rotation_std[1]: >6.3f}")
+        lines.append(f"  Yaw={rotation[2]: >+6.3f}° ±{rotation_std[2]: >6.3f}")
 
     if data_dict != {}:
         if time_diff is not None:
@@ -509,6 +534,9 @@ cv2.resizeWindow("Sensor Data", IMG_WIDTH, IMG_HEIGHT)
 
 # Set mouse callback function
 cv2.setMouseCallback("Sensor Data", mouse_callback)
+
+# Start pressure sensor data translation system
+pressure_system = manta.PressureSensorSystem()
 
 
 # Main loop

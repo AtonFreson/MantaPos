@@ -45,7 +45,6 @@ match CAMERA_TYPE:
 camera_matrix = calibration_data['camera_matrix']
 dist_coeffs = calibration_data['dist_coeffs']
 
-# Number of markers in the grid (example: 3x3 grid)
 # The marker ID of the first marker in the order. OBS: Markers in folder need to be sequential!
 grid_rows, marker_base = manta.display_marker_grid(num_markers, marker_size, marker_border_size)
 grid_cols = grid_rows # Assume square

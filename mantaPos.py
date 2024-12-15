@@ -11,32 +11,60 @@ import socket
 import json
 
 # Initialize parameters
-# Set the selected camera: '4K', 'gopro' or 'axis'.
-CAMERA_TYPE = "4K"
-CAMERA_INPUT = 3  # Camera index if the source is webcam-based
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
+camera_calibration_file = 'camera_calibration_4K_6s.npz'
 
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
+
+MARKER_TYPE = ["ChArUco", "Single"]  # Select the marker type to use
+# Options are "ChArUco" or "ArUco", and "Single" or "Quad" respectively
+
+# Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
+visualise_calib_dist = True
+new_camera_matrix = None
+
+if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
+    # ChArUco board settings
+    squares_vertically = 6
+    squares_horizontally = squares_vertically
+    square_pixels = int(140*7/squares_horizontally) # Pixel size of the chessboard squares
+    grid_edge = 20 # Pixel margin outside the ChArUco grid
+    marker_ratio = 0.75 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
+    square_length = 0.2975/6 * square_pixels/200 # Real world length of square in meters
+    #square_length = 1.110/7 * square_pixels/280 # Lyftkranen - large conference room screen
+
+    print(f"Reference length of {squares_horizontally} squares:", square_length*squares_horizontally, "meters")
+    
+elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Single":
+    # Define the real-world size of the ArUco markers (same as during calibration)
+    screen_dpm = 200/0.0495 # Length of marker's side in pixels / meters
+
+    marker_size = 200
+    marker_border_size = 25
+    num_markers = 0 # Set to 0 if all
+
+    # Set the selected camera: axis, axis_low or gopro.
+    CAMERA_TYPE = "4K"
+    CAMERA_INPUT = 2 # OBS Virtual Camera
+    CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
+
+    marker_length = marker_size/screen_dpm # in meters
+
+    object_points = np.array([[0, 0, 0], 
+                            [marker_length, 0, 0], 
+                            [marker_length, marker_length, 0], 
+                            [0, marker_length, 0]], dtype=np.float32)
+    
+    # The marker ID of the first marker in the order. OBS: Markers in folder need to be sequential!
+    grid_rows, marker_base = manta.display_marker_grid(num_markers, marker_size, marker_border_size)
+    grid_cols = grid_rows # Assume square
+    grid_marker_spacing = marker_length * (marker_border_size*2 / marker_size + 1) # Distance between markers in the grid (meters)
+
 
 # Setup UDP socket for sending camera position/rotation data
 UDP_IP = "127.0.0.1"   # Localhost
 UDP_PORT = 13233       # Port for sending data
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-# ChArUco board settings
-squares_vertically = 6
-squares_horizontally = squares_vertically
-square_pixels = int(140*7/squares_horizontally) # Pixel size of the chessboard squares
-grid_edge = 20 # Pixel margin outside the ChArUco grid
-marker_ratio = 0.75 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
-square_length = 0.2975/6 * square_pixels/200 # Real world length of square in meters
-#square_length = 1.110/7 * square_pixels/280 # Lyftkranen - large conference room screen
-
-print(f"Reference length of {squares_horizontally} squares:", square_length*squares_horizontally, "meters")
-
-# Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
-visualise_calib_dist = True
-new_camera_matrix = None
 
 # Generate and display the marker grid
 board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
@@ -47,39 +75,19 @@ params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
-if CAMERA_TYPE == "4K":
-    #cap = cv2.VideoCapture(CAMERA_RTSP_ADDR)
-    cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
-else:
-    cap = cv2.VideoCapture(CAMERA_INPUT)
+cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
 
-# Set camera resolution based on the camera type
-match CAMERA_TYPE:
-    case "axis":
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 768)
-    case "gopro":
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    case "4K":
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
+# Set camera resolution
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
 if not cap.isOpened():
-    print("Error: Could not open camera", CAMERA_INPUT)
+    print("Error: Could not open camera")
     exit()
 
 # Load previously saved camera calibration data
-calibration_dir = './camera_calibrations'
-match CAMERA_TYPE:
-    case "axis":
-        calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_axis.npz'))
-    case "axis_low":
-        calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_axis_low.npz'))
-    case "gopro":
-        calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_gopro.npz'))
-    case "4K":
-        calibration_data = np.load(os.path.join(calibration_dir,'camera_calibration_4K_6s.npz'))
+calibration_dir = './calibrations/camera_calibrations'
+calibration_data = np.load(os.path.join(calibration_dir, camera_calibration_file))
 camera_matrix = calibration_data['camera_matrix']
 dist_coeffs = calibration_data['dist_coeffs']
 
@@ -140,9 +148,9 @@ while True:
         cv2.aruco.drawDetectedMarkers(frame, corners, ids)
         if charuco_ids is not None and num_corners > 0:
             cv2.aruco.drawDetectedCornersCharuco(frame, charuco_corners, charuco_ids, cornerColor=(255, 0, 0))
-            if CAMERA_TYPE == "4K":
-                for i, corner in enumerate(charuco_corners):
-                    cv2.putText(frame, str(charuco_ids[i][0]), (int(corner[0][0]), int(corner[0][1])), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
+            
+            for i, corner in enumerate(charuco_corners):
+                cv2.putText(frame, str(charuco_ids[i][0]), (int(corner[0][0]), int(corner[0][1])), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
 
         if charuco_ids is not None and num_corners >= 4:
             # Estimate pose of the ChArUco board
@@ -182,15 +190,7 @@ while True:
 
     if success:
         # Display position and rotation
-        match CAMERA_TYPE:
-            case "axis":
-                position, position_std, rotation, rotation_std = manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.3, thickness=2, rect_padding=(10,10,1000,200))
-            case "axis_low":
-                position, position_std, rotation, rotation_std = manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all)
-            case "gopro":
-                position, position_std, rotation, rotation_std = manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=1.5, thickness=2, rect_padding=(10,10,1100,280))
-            case "4K":
-                position, position_std, rotation, rotation_std = manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,400))
+        position, position_std, rotation, rotation_std = manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, dist_coeffs, object_points_all, image_points_all, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,400))
     
         # Send data via UDP        
         json_data = {

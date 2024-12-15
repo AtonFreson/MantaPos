@@ -23,8 +23,12 @@ import matplotlib.pyplot as plt
 # Configuration
 DATA_FILE = 'recordings/test recording - 12-13@19-16.json'
 #DATA_FILE = os.path.join(os.path.dirname(__file__), DATA_FILE)
-SENSOR1_CALIBRATION_OUTPUT = 'calibrations/pressure_calibrations/sensor1_calibration.json'
-SENSOR2_CALIBRATION_OUTPUT = 'calibrations/pressure_calibrations/sensor2_calibration.json'
+sensor1_name = 'pressure1'
+sensor2_name = 'pressure2'
+
+CALIBRATION_FOLDER = 'calibrations/pressure_calibrations/'
+SENSOR1_CALIBRATION_OUTPUT = CALIBRATION_FOLDER + sensor1_name + '_calibration.json'
+SENSOR2_CALIBRATION_OUTPUT = CALIBRATION_FOLDER + sensor2_name + '_calibration.json'
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
@@ -46,8 +50,8 @@ def load_and_prepare_data(file_path):
         if item.get('mpu_unit') == 1 and 'encoder' in item and 'distance' in item['encoder']:
             depth_data.append({'timestamp': item['encoder']['timestamp'], 'distance': item['encoder']['distance']})
         
-        if item.get('mpu_unit') == 0 and 'pressure' in item and 'adc_value0' in item['pressure'] and 'adc_value1' in item['pressure']:
-            pressure_data.append({'timestamp': item['pressure']['timestamp'], 'sensor0': item['pressure']['adc_value0'], 'sensor1': item['pressure']['adc_value1']})
+        if item.get('mpu_unit') == 0 and 'pressure' in item and sensor1_name in item['pressure'] and sensor2_name in item['pressure']:
+            pressure_data.append({'timestamp': item['pressure']['timestamp'], 'sensor0': item['pressure'][sensor1_name], 'sensor1': item['pressure'][sensor2_name]})
              
     if not depth_data or not pressure_data:
         raise ValueError("No valid sensor or depth data found in the JSON file")
@@ -101,18 +105,18 @@ def create_models():
         'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
         'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
         'SVR': SVR(kernel='rbf'),
-        'DecisionTree': DecisionTreeRegressor(random_state=42),
-        'RandomForest': RandomForestRegressor(random_state=42),
-        'GradientBoosting': GradientBoostingRegressor(random_state=42),
-        'XGBoost': xgb.XGBRegressor(random_state=42),
-        'MLP': MLPRegressor(random_state=42),
-        'Ridge': Ridge(random_state=42),
-        'Lasso': Lasso(random_state=42),
-        'ElasticNet': ElasticNet(random_state=42),
+        'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE),
+        'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE),
+        'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE),
+        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE),
+        'MLP': MLPRegressor(random_state=RANDOM_STATE),
+        'Ridge': Ridge(random_state=RANDOM_STATE),
+        'Lasso': Lasso(random_state=RANDOM_STATE),
+        'ElasticNet': ElasticNet(random_state=RANDOM_STATE),
         'KNN': KNeighborsRegressor(n_neighbors=3),  # Adjusted n_neighbors
         'GaussianProcess': GaussianProcessRegressor(kernel=ConstantKernel(1.0) * RBF(1.0)),
-        'RANSAC': RANSACRegressor(random_state=42),
-        'TheilSen': TheilSenRegressor(random_state=42),
+        'RANSAC': RANSACRegressor(random_state=RANDOM_STATE),
+        'TheilSen': TheilSenRegressor(random_state=RANDOM_STATE),
         'Spline3': lambda x, y: UnivariateSpline(x, y, k=2)
     }
     return models
@@ -140,6 +144,7 @@ def evaluate_models(X_train, X_test, y_train, y_test, models):
                     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
                     results[name] = {'r2': r2, 'rmse': rmse}
                     fitted_models[name] = model_fitted
+                    #print(f"Model: {name}, R²: {r2:.4f}, RMSE: {rmse:.4f}")
                     
                     if r2 > best_score:
                         best_score = r2
@@ -161,6 +166,7 @@ def evaluate_models(X_train, X_test, y_train, y_test, models):
                 rmse = np.sqrt(mean_squared_error(y_test, y_pred))
                 results[name] = {'r2': r2, 'rmse': rmse}
                 fitted_models[name] = model
+                #print(f"Model: {name}, R²: {r2:.4f}, RMSE: {rmse:.4f}")
                 
                 if r2 > best_score:
                     best_score = r2
@@ -328,8 +334,8 @@ def main():
             X2_train, X2_test, y2_train, y2_test, models)
         
         # Save calibration parameters
-        save_calibration(best_model1, best_model_name1, 'adc_value0', file_path=SENSOR1_CALIBRATION_OUTPUT)
-        save_calibration(best_model2, best_model_name2, 'adc_value1', file_path=SENSOR2_CALIBRATION_OUTPUT)
+        save_calibration(best_model1, best_model_name1, sensor1_name, file_path=SENSOR1_CALIBRATION_OUTPUT)
+        save_calibration(best_model2, best_model_name2, sensor2_name, file_path=SENSOR2_CALIBRATION_OUTPUT)
         
         print("\nCalibration Results:")
         print(f"Sensor 0 (adc_value0) - Best Model: {best_model_name1}")
