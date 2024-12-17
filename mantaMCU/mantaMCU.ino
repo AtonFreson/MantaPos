@@ -11,13 +11,13 @@
 #include <EEPROM.h>
 
 // The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Main", 2:"Z-axis Encoder - Second", 3:"Surface Pressure Sensor" 
-#define MPU_UNIT 1
+#define MPU_UNIT 0
 
 // Features available on this unit
 #define HAS_CLOCK       1
 #define HAS_ENCODER     1
-#define HAS_IMU         0
-#define HAS_PRESSURE    0
+#define HAS_IMU         1
+#define HAS_PRESSURE    1
 
 // Pin definitions for SCA50 differential signals
 #define ENCODER_PIN_A_POS 14  // A
@@ -96,6 +96,14 @@ int16_t ax, ay, az;
 int16_t gx, gy, gz;
 float ax_mss, ay_mss, az_mss;
 float gx_rads, gy_rads, gz_rads;
+
+const int iAx = 0, iAy = 1, iAz = 2, iGx = 3, iGy = 4, iGz = 5;
+
+const int usDelay = 3150;   // empirical, to hold sampling to 200 Hz
+const int NFast = 1000;     // the bigger, the better (but slower)
+const int NSlow = 10000;
+int LowValue[6], HighValue[6], Smoothed[6], LowOffset[6], HighOffset[6], Target[6];
+int N;
 #endif
 
 #if HAS_ENCODER
@@ -322,6 +330,14 @@ void dataPrint(ESP1588_Tracker& m) {
     rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
     speed = countsPerSec * DISTANCE_PER_COUNT;
 
+    // Validate rpm and speed
+    if (!isfinite(rpm)) {
+        rpm = 0.0;
+    }
+    if (!isfinite(speed)) {
+        speed = 0.0;
+    }
+
     lastEncoderCount = currentCount;
     lastMeasurementTime = encoderTimestamp;
 #endif
@@ -457,6 +473,106 @@ void PrintPTPInfo(ESP1588_Tracker& t) {
     SerialW.printf("\n");
 }
 
+#if HAS_IMU
+void GetSmoothed() { 
+    int16_t RawValue[6];
+    int i;
+    long Sums[6];
+    for (i = iAx; i <= iGz; i++) { Sums[i] = 0; }
+
+    for (i = 1; i <= N; i++) { // get sums
+        accelgyro.getMotion6(&RawValue[iAx], &RawValue[iAy], &RawValue[iAz], 
+                             &RawValue[iGx], &RawValue[iGy], &RawValue[iGz]);
+        delayMicroseconds(usDelay);
+        for (int j = iAx; j <= iGz; j++)
+          Sums[j] = Sums[j] + RawValue[j];
+    } // get sums
+
+    for (i = iAx; i <= iGz; i++) { Smoothed[i] = (Sums[i] + N/2) / N ; }
+} // GetSmoothed
+
+void SetOffsets(int TheOffsets[6]) {
+    accelgyro.setXAccelOffset(TheOffsets [iAx]);
+    accelgyro.setYAccelOffset(TheOffsets [iAy]);
+    accelgyro.setZAccelOffset(TheOffsets [iAz]);
+    accelgyro.setXGyroOffset (TheOffsets [iGx]);
+    accelgyro.setYGyroOffset (TheOffsets [iGy]);
+    accelgyro.setZGyroOffset (TheOffsets [iGz]);
+} // SetOffsets
+
+void PullBracketsIn() {
+    boolean AllBracketsNarrow;
+    boolean StillWorking;
+    int NewOffset[6];
+  
+    AllBracketsNarrow = false;
+    StillWorking = true;
+    while (StillWorking) {
+        StillWorking = false;
+        if (AllBracketsNarrow && (N == NFast)) {
+            N = NSlow;
+        } else { AllBracketsNarrow = true; }// tentative
+        
+        for (int i = iAx; i <= iGz; i++) { 
+            if (HighOffset[i] <= (LowOffset[i]+1)) {
+                NewOffset[i] = LowOffset[i];
+            } else { // binary search
+                StillWorking = true;
+                NewOffset[i] = (LowOffset[i] + HighOffset[i]) / 2;
+                if (HighOffset[i] > (LowOffset[i] + 10)) { AllBracketsNarrow = false; }
+            } // binary search
+        }
+
+        SetOffsets(NewOffset);
+        GetSmoothed();
+        for (int i = iAx; i <= iGz; i++) { // closing in
+            if (Smoothed[i] > Target[i]) { // use lower half
+                HighOffset[i] = NewOffset[i];
+                HighValue[i] = Smoothed[i];
+            } else { // use upper half
+                LowOffset[i] = NewOffset[i];
+                LowValue[i] = Smoothed[i];
+            } // use upper half
+        } // closing in
+    } // still working
+} // PullBracketsIn
+
+void PullBracketsOut() {
+    boolean Done = false;
+    int NextLowOffset[6];
+    int NextHighOffset[6];
+
+    while (!Done) {
+        Done = true;
+        SetOffsets(LowOffset);
+        GetSmoothed();
+        for (int i = iAx; i <= iGz; i++) { // got low values
+            LowValue[i] = Smoothed[i];
+            if (LowValue[i] >= Target[i]) { 
+                Done = false;
+                NextLowOffset[i] = LowOffset[i] - 1000;
+            } else { NextLowOffset[i] = LowOffset[i]; }
+        } // got low values
+      
+        SetOffsets(HighOffset);
+        GetSmoothed();
+        for (int i = iAx; i <= iGz; i++) { // got high values
+            HighValue[i] = Smoothed[i];
+            if (HighValue[i] <= Target[i]) {
+                Done = false;
+                NextHighOffset[i] = HighOffset[i] + 1000;
+            } else { NextHighOffset[i] = HighOffset[i]; }
+        } // got high values
+
+        for (int i = iAx; i <= iGz; i++) {
+            LowOffset[i] = NextLowOffset[i];   // had to wait until ShowProgress done
+            HighOffset[i] = NextHighOffset[i]; // ..
+        }
+    } // keep going
+} // PullBracketsOut
+#endif
+
+
 void setup() {
     delay(250);
     SerialW.begin(115200);
@@ -531,8 +647,8 @@ void setup() {
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
     EEPROM.get(0, storedSyncTime);   // Read the last stored sync time from EEPROM
     EEPROM.get(4, storedOffset);     // Read the offset from EEPROM
-    Serial.printf("Stored sync time: %u\n", storedSyncTime);
-    Serial.printf("Stored offset: %lld\n", storedOffset);
+    SerialW.printf("Stored sync time: %u\n", storedSyncTime);
+    SerialW.printf("Stored offset: %lld\n", storedOffset);
 
     esp1588.SetDomain(0);	// The domain of your PTP clock, 0 - 31
     esp1588.Begin();
@@ -644,7 +760,42 @@ void loop() {
 #endif
 #if HAS_IMU
                     else if (strcmp(command, "calibrate imu") == 0) {
-                        // Add IMU calibration code here
+                        Serial.println("Calibrating IMU (this may take several minutes)...");
+
+                        // Informing the user about the calibration process
+                        char jsonBuffer[1024];
+                        snprintf(jsonBuffer, sizeof(jsonBuffer),
+                            "{\"mpu_unit\": \"%d\", "
+                            "\"imu\": {\"info\": \"%s\", \"info_1\": \"%s\", \"info_2\": \"%s\", \"info_3\": \"%s\", \"info_4\": \"%s\"}}",
+                            MPU_UNIT,
+                            "Calibrating IMU...", "Please do not", "move the unit.", "(This takes", "several minutes)"
+                            );
+                        udp.beginPacket(udpAddress, udpPort);
+                        udp.print(jsonBuffer);
+                        udp.endPacket();
+
+                        accelgyro.CalibrateAccel(6);
+                        accelgyro.CalibrateGyro(6);
+                        accelgyro.CalibrateAccel(1);
+                        accelgyro.CalibrateGyro(1);
+                        accelgyro.CalibrateAccel(1);
+                        accelgyro.CalibrateGyro(1);
+                        accelgyro.CalibrateAccel(1);
+                        accelgyro.CalibrateGyro(1);
+                        accelgyro.CalibrateAccel(1);
+                        accelgyro.CalibrateGyro(1);
+                        for (int i = iAx; i <= iGz; i++) {
+                            Target[i] = 0; // must fix for ZAccel 
+                            HighOffset[i] = 0;
+                            LowOffset[i] = 0;
+                        } // set targets and initial guesses
+                        Target[iAy] = 16384;
+                        N = NFast;
+                        
+                        PullBracketsOut();
+                        PullBracketsIn();
+
+                        SerialW.println("IMU Calibration complete.");
                     }
 #endif
                     break;

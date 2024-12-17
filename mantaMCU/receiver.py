@@ -94,8 +94,12 @@ BUTTON_Y2 = BUTTON_Y1 + 40
 SYNC_BUTTON_Y1 = BUTTON_Y2 + 20
 SYNC_BUTTON_Y2 = SYNC_BUTTON_Y1 + 40
 
+# Define new button coordinates below "Sync All Clocks" button
+CALIBRATE_BUTTON_Y1 = SYNC_BUTTON_Y2 + 20
+CALIBRATE_BUTTON_Y2 = CALIBRATE_BUTTON_Y1 + 40
+
 # Adjust coordinates for the "Encoders Section"
-ZERO_ENCODER_TITLE_Y = SYNC_BUTTON_Y2 + 65
+ZERO_ENCODER_TITLE_Y = CALIBRATE_BUTTON_Y2 + 65
 
 WAIT_CHECKBOX_X = BUTTON_X1
 WAIT_CHECKBOX_Y = ZERO_ENCODER_TITLE_Y + 20
@@ -187,17 +191,27 @@ def create_unit_lines(data_dict, unit_number):
 
     if "imu" in data_dict:
         imu = data_dict["imu"]
-        lines.append("IMU Data:")
-        lines.append(f"-- Time: {int(imu['timestamp'])/1000:.3f} --")
-        time_diff = update_time_diff(imu['timestamp'], time_diff, unit_number)
-        acc = imu["acceleration"]
-        lines.append(f" Accel X:    {acc['x']: .5f} m/s^2")
-        lines.append(f" Accel Y:    {acc['y']: .5f} m/s^2")
-        lines.append(f" Accel Z:    {acc['z']: .5f} m/s^2")
-        gyro = imu["gyroscope"]
-        lines.append(f" Gyro X:     {gyro['x']: .5f} rad/s")
-        lines.append(f" Gyro Y:     {gyro['y']: .5f} rad/s")
-        lines.append(f" Gyro Z:     {gyro['z']: .5f} rad/s")
+        if "info" in imu:
+            lines.append("IMU Info:")
+            lines.append(f" {imu['info']}")
+            lines.append("")
+            lines.append(f" {imu['info_1']} {imu['info_2']}")
+            lines.append(f" {imu['info_3']} {imu['info_4']}")
+            last_received_times[unit_number] = datetime.now().timestamp() + 600  # 10 minutes in the future
+            for i in range(3): lines.append("")
+        else:
+            lines.append("IMU Data:")
+            lines.append(f"-- Time: {int(imu['timestamp'])/1000:.3f} --")
+            time_diff = update_time_diff(imu['timestamp'], time_diff, unit_number)
+            acc = imu["acceleration"]
+            lines.append(f" Accel X:    {acc['x']: .5f} m/s^2")
+            lines.append(f" Accel Y:    {acc['y']: .5f} m/s^2")
+            lines.append(f" Accel Z:    {acc['z']: .5f} m/s^2")
+            gyro = imu["gyroscope"]
+            lines.append(f" Gyro X:     {gyro['x']: .5f} rad/s")
+            lines.append(f" Gyro Y:     {gyro['y']: .5f} rad/s")
+            lines.append(f" Gyro Z:     {gyro['z']: .5f} rad/s")
+            
         lines.append("")
     elif unit_number != 4:
         for i in range(9): lines.append("")
@@ -222,6 +236,8 @@ def create_unit_lines(data_dict, unit_number):
             lines.append(f" RTC Diff:   {press['difference']}ms")
         else:
             lines.append(" RTC Diff:   Err(Out of Range)")
+    elif unit_number != 4:
+        for i in range(6): lines.append("")
 
     if "camera" in data_dict:
         cam = data_dict["camera"]
@@ -329,6 +345,12 @@ def create_data_image(data_dicts):
     sync_button_color = (70, 70, 70) if not button_pressed else (0, 0, 255)
     cv2.rectangle(img, (BUTTON_X1, SYNC_BUTTON_Y1), (BUTTON_X2, SYNC_BUTTON_Y2), sync_button_color, -1)
     cv2.putText(img, "Sync All Clocks", (BUTTON_X1 + 20, SYNC_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
+                1, (255, 255, 255), 2)
+    
+    # Draw "Calibrate IMU" button
+    calibrate_button_color = (70, 70, 70) if not button_pressed else (0, 0, 255)
+    cv2.rectangle(img, (BUTTON_X1, CALIBRATE_BUTTON_Y1), (BUTTON_X2, CALIBRATE_BUTTON_Y2), calibrate_button_color, -1)
+    cv2.putText(img, "Calibrate IMU", (BUTTON_X1 + 20, CALIBRATE_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (255, 255, 255), 2)
     
     # Draw "Encoders" title
@@ -460,7 +482,10 @@ def mouse_callback(event, x, y, flags, param):
         elif BUTTON_X1 <= x <= BUTTON_X2 and SYNC_BUTTON_Y1 <= y <= SYNC_BUTTON_Y2:
             selected_units = list(range(len(unit_names))) # Automatically select all units
             command_dict = {"units": selected_units, "command": "sync"}
-       
+        # Check if click is inside "Calibrate IMU" button
+        elif BUTTON_X1 <= x <= BUTTON_X2 and CALIBRATE_BUTTON_Y1 <= y <= CALIBRATE_BUTTON_Y2:
+            command_dict = {"units": selected_units, "command": "calibrate imu"}
+
         # Check if click is inside "Start/Stop Recording" button
         elif BUTTON_X1 <= x <= BUTTON_X2 and RECORD_BUTTON_Y1 <= y <= RECORD_BUTTON_Y2:
             # If currently recording, stop
