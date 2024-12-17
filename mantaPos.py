@@ -211,7 +211,7 @@ while True:
 
     # Check if the user wants to quit
     key = cv2.waitKey(1)
-    if key == ord('q'):
+    if key == 27:
         break
 
 # Release the camera and close windows

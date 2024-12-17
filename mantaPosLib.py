@@ -18,6 +18,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.linear_model import RANSACRegressor
 import xgboost as xgb
 from scipy.interpolate import BSpline
+import pickle
 
 # Function to extract the numerical index from the filename
 def extract_index(filename):
@@ -701,69 +702,25 @@ class PressureSensorSystem:
         self.sensor_models = [None, None, None, None]
         self.reference_surface_pressure = None
         
-    def load_calibration(self, sensor_num, sensor_file='calibrations/pressure_calibrations/pressure1_calibration.json'):
-        """Load calibration parameters for both sensors."""
+    def load_calibration(self, sensor_num, sensor_file='calibrations/pressure_calibrations/pressure1_calibration.pkl'):
+        """Load calibration model using pickle."""
         try:
-            # Load sensor 1 calibration
-            with open(sensor_file, 'r') as f:
-                sensor_cal = json.load(f)
+            with open(sensor_file, 'rb') as f:
+                calibration_data = pickle.load(f)
             
-            # Initialize models based on calibration data
-            self.sensor_models[sensor_num] = self.initialize_model(sensor_cal)
-            
+            self.sensor_models[sensor_num] = self.initialize_model(calibration_data)
             return True
-            
+                
         except Exception as e:
             print(f"Error loading calibration: {str(e)}")
             return False
     
     def initialize_model(self, calibration_data):
-        """Initialize a model with saved parameters."""
+        """Initialize a model with loaded pickle data."""
         model_name = calibration_data['model_name']
+        model = calibration_data['model']
         
-        # Mapping model names to classes
-        model_map = {
-            'Linear': LinearRegression,
-            'Ridge': Ridge,
-            'Lasso': Lasso,
-            'ElasticNet': ElasticNet,
-            'SVR': SVR,
-            'DecisionTree': DecisionTreeRegressor,
-            'RandomForest': RandomForestRegressor,
-            'GradientBoosting': GradientBoostingRegressor,
-            'XGBoost': xgb.XGBRegressor,
-            'MLP': MLPRegressor,
-            'KNN': KNeighborsRegressor,
-            'GaussianProcess': GaussianProcessRegressor,
-            'RANSAC': RANSACRegressor,
-            'TheilSen': TheilSenRegressor,
-            'Spline3': None  # Will handle separately
-        }
-        
-        if model_name == 'Spline3':
-            # Reconstruct the spline from knots and coefficients
-            knots = np.array(calibration_data['knots'])
-            coeffs = np.array(calibration_data['coefficients'])
-            # The calibration used k=2 for the spline
-            k = 2
-            model = BSpline(knots, coeffs, k)
-            return model
-        else:
-            # For other models
-            model_class = model_map.get(model_name)
-            if model_class is None:
-                raise ValueError(f"Unknown model type: {model_name}")
-            
-            model_params = calibration_data.get('model_params', {})
-            model = model_class(**model_params) if model_params else model_class()
-            
-            # If linear-like model, try to set coefficients and intercept
-            if 'coefficients' in calibration_data and calibration_data['coefficients'] is not None and hasattr(model, 'coef_'):
-                model.coef_ = np.array(calibration_data['coefficients'])
-            if 'intercept' in calibration_data and calibration_data['intercept'] is not None and hasattr(model, 'intercept_'):
-                model.intercept_ = calibration_data['intercept']
-            
-            return model
+        return model
     
     def calibrate_surface_pressure(self, surface_sensor_value):
         """Calibrate system using current surface pressure reading."""
@@ -783,7 +740,7 @@ class PressureSensorSystem:
             depth = model(sensor_value)
         else: #  Assume a sklearn-like model
             depth = model.predict([[sensor_value]])[0]
-        return depth
+        return depth#round(depth, 5)
     
     def get_depth(self, depth_sensor_value, surface_sensor_value):
         """
@@ -806,16 +763,11 @@ class PressureSensorSystem:
             # Compensate depth sensor reading for atmospheric pressure change
             compensated_depth_reading = depth_sensor_value - pressure_correction
             
-            # Determine how to get depth depending on model type
-            # If the model is callable (like a spline), just call it
-            '''if callable(self.sensor2_model):
-                depth = self.sensor2_model(compensated_depth_reading)
-            else:
-                # Otherwise, assume a sklearn-like model
-                depth = self.sensor2_model.predict([[compensated_depth_reading]])[0]
+            # Get depth using converted raw value
+            depth = self.convert_raw(1, compensated_depth_reading)  # Assuming sensor_num=1 for depth sensor
             
-            return max(0.0, depth)  # Ensure non-negative depth'''
-            
+            return max(0.0, depth)  # Ensure non-negative depth
+                
         except Exception as e:
             print(f"Error calculating depth: {str(e)}")
             return None

@@ -6,6 +6,14 @@ import cv2
 import numpy as np
 from datetime import datetime
 import os
+import traceback
+
+# Add parent directory to the path to import mantaPosLib
+from inspect import getsourcefile
+current_path = os.path.abspath(getsourcefile(lambda:0))
+current_dir = os.path.dirname(current_path)
+parent_dir = current_dir[:current_dir.rfind(os.path.sep)]
+sys.path.insert(0, parent_dir)
 import mantaPosLib as manta
 
 # UDP socket parameters
@@ -34,7 +42,7 @@ time_diff_history = [[] for _ in range(len(unit_names))]
 # Data folders
 recording_folder = "recordings"
 pressure_calib_folder = "calibrations/pressure_calibrations/"
-pressure_sensors = ["pressure1, pressure2, pressure3, pressure4"]
+pressure_sensors = ["pressure1", "pressure2", "pressure3", "pressure4"]
 
 # Shared variables and lock
 data_lock = threading.Lock()
@@ -163,19 +171,13 @@ def create_unit_lines(data_dict, unit_number):
         lines.append(f"-- Time: {int(press['timestamp'])/1000:.3f} --")
         time_diff = update_time_diff(press['timestamp'], time_diff, unit_number)
         
-        for i in range(0+2*unit_number//3, 2+2*unit_number//3):
-            if not pressure_system.sensor_models[i]:
-                pressure_calib = pressure_calib_folder + pressure_sensors[i] + "_calibration.json"
-                ret = pressure_system.load_calibration(i, pressure_calib)
-                if not ret:
-                    print(f"Error loading calibration for sensor {pressure_sensors[i]}")
-                    
-            adc_value = int(press['adc_value' + i % 2])
+        for i in range(0+2*unit_number//3, 2+2*unit_number//3):                    
+            adc_value = int(press['adc_value' + str(i % 2)])
             depth = pressure_system.convert_raw(i, adc_value)
             if depth is None:
-                lines.append(f" {pressure_sensors[i]} depth: Err(Calib) ({adc_value})")
+                lines.append(f" {pressure_sensors[i]}: Err(Calib) ({adc_value})")
             else:
-                lines.append(f" {pressure_sensors[i]} depth: {depth}m ({adc_value})")
+                lines.append(f" {pressure_sensors[i]}: {depth: .5f}m ({adc_value})")
         
         #lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
         #lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
@@ -537,7 +539,13 @@ cv2.setMouseCallback("Sensor Data", mouse_callback)
 
 # Start pressure sensor data translation system
 pressure_system = manta.PressureSensorSystem()
-
+for i in range(0,4):
+    pressure_calib = pressure_calib_folder + pressure_sensors[i] + "_calibration.pkl"
+    ret = pressure_system.load_calibration(i, pressure_calib)
+    if not ret:
+        print(f"Error loading calibration for sensor {pressure_sensors[i]}")
+    else:
+        print(f"Loaded calibration for sensor {pressure_sensors[i]}")
 
 # Main loop
 try:
@@ -618,7 +626,11 @@ try:
             break
 
 except KeyboardInterrupt:
-    print("Main thread exiting...")
+    print("User exiting...")
+
+except Exception as e:
+    traceback.print_exc()
+
 finally:
     if recording_data_buffer:
         print("Flushing remaining recording data to file...")
@@ -631,6 +643,8 @@ finally:
             print("Error writing to file:", e)
 
     print("Exiting...")
+
+
     stop_threads = True
     udp_thread.join()
     cv2.destroyAllWindows()

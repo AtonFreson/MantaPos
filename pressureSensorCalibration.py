@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import PolynomialFeatures
 from sklearn.pipeline import make_pipeline
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, TheilSenRegressor
+from sklearn.linear_model import (
+    LinearRegression, Ridge, Lasso, ElasticNet, TheilSenRegressor, RANSACRegressor
+)
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -11,24 +12,26 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
-from sklearn.linear_model import RANSACRegressor
 import xgboost as xgb
 from scipy.interpolate import UnivariateSpline, interp1d
 from sklearn.metrics import r2_score, mean_squared_error
-import json
+from sklearn.preprocessing import PolynomialFeatures
+import pickle
 import warnings
 warnings.filterwarnings('ignore')
 import matplotlib.pyplot as plt
+import os
+import json
 
 # Configuration
 DATA_FILE = 'recordings/test recording - 12-13@19-16.json'
-#DATA_FILE = os.path.join(os.path.dirname(__file__), DATA_FILE)
-sensor1_name = 'pressure1'
-sensor2_name = 'pressure2'
+sensor1_name = 'adc_value0'
+sensor2_name = 'adc_value1'
 
 CALIBRATION_FOLDER = 'calibrations/pressure_calibrations/'
-SENSOR1_CALIBRATION_OUTPUT = CALIBRATION_FOLDER + sensor1_name + '_calibration.json'
-SENSOR2_CALIBRATION_OUTPUT = CALIBRATION_FOLDER + sensor2_name + '_calibration.json'
+os.makedirs(CALIBRATION_FOLDER, exist_ok=True)
+SENSOR1_CALIBRATION_OUTPUT = os.path.join(CALIBRATION_FOLDER, f"{sensor1_name}_calibration.pkl")
+SENSOR2_CALIBRATION_OUTPUT = os.path.join(CALIBRATION_FOLDER, f"{sensor2_name}_calibration.pkl")
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
@@ -51,7 +54,11 @@ def load_and_prepare_data(file_path):
             depth_data.append({'timestamp': item['encoder']['timestamp'], 'distance': item['encoder']['distance']})
         
         if item.get('mpu_unit') == 0 and 'pressure' in item and sensor1_name in item['pressure'] and sensor2_name in item['pressure']:
-            pressure_data.append({'timestamp': item['pressure']['timestamp'], 'sensor0': item['pressure'][sensor1_name], 'sensor1': item['pressure'][sensor2_name]})
+            pressure_data.append({
+                'timestamp': item['pressure']['timestamp'],
+                'sensor0': item['pressure'][sensor1_name],
+                'sensor1': item['pressure'][sensor2_name]
+            })
              
     if not depth_data or not pressure_data:
         raise ValueError("No valid sensor or depth data found in the JSON file")
@@ -108,8 +115,8 @@ def create_models():
         'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE),
         'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE),
         'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE),
-        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE),
-        'MLP': MLPRegressor(random_state=RANDOM_STATE),
+        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, verbosity=0),
+        'MLP': MLPRegressor(random_state=RANDOM_STATE, max_iter=1000),
         'Ridge': Ridge(random_state=RANDOM_STATE),
         'Lasso': Lasso(random_state=RANDOM_STATE),
         'ElasticNet': ElasticNet(random_state=RANDOM_STATE),
@@ -179,28 +186,20 @@ def evaluate_models(X_train, X_test, y_train, y_test, models):
     
     return results, fitted_models, best_model, best_model_name
 
+
 def save_calibration(model, model_name, sensor_type, file_path):
-    """Save calibration parameters to JSON file."""
-    if model_name == 'Spline3':
-        # UnivariateSpline does not have .get_params(), .coef_ or .intercept_ in the same way as linear models.
-        # We'll just store the knots and coefficients.
-        calibration_data = {
-            'sensor_type': sensor_type,
-            'model_name': model_name,
-            'knots': model.get_knots().tolist(),
-            'coefficients': model.get_coeffs().tolist()
-        }
-    else:
-        calibration_data = {
-            'sensor_type': sensor_type,
-            'model_name': model_name,
-            'model_params': model.get_params() if hasattr(model, 'get_params') else None,
-            'coefficients': model.coef_.tolist() if hasattr(model, 'coef_') else None,
-            'intercept': float(model.intercept_) if hasattr(model, 'intercept_') else None
-        }
-    
-    with open(file_path, 'w') as f:
-        json.dump(calibration_data, f, indent=4)
+    """Save calibration model using pickle."""
+    try:
+        with open(file_path, 'wb') as f:
+            pickle.dump({
+                'sensor_type': sensor_type,
+                'model_name': model_name,
+                'model': model
+            }, f)
+        print(f"Saved {model_name} model for {sensor_type} to {file_path}")
+    except Exception as e:
+        print(f"Error saving calibration model: {str(e)}")
+
 
 def visualize_models(X_train, X_test, y_train, y_test, results, fitted_models):
     """
@@ -309,6 +308,7 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
     plt.tight_layout()
     plt.show()
 
+
 def main():
     try:
         # Load data
@@ -329,11 +329,11 @@ def main():
             X1_train, X1_test, y1_train, y1_test, models)
         
         # Evaluate models for sensor 1
-        print("Evaluating models for Sensor 1 (adc_value1)...")
+        print("\nEvaluating models for Sensor 1 (adc_value1)...")
         results2, fitted_models2, best_model2, best_model_name2 = evaluate_models(
             X2_train, X2_test, y2_train, y2_test, models)
         
-        # Save calibration parameters
+        # Save calibration models using pickle
         save_calibration(best_model1, best_model_name1, sensor1_name, file_path=SENSOR1_CALIBRATION_OUTPUT)
         save_calibration(best_model2, best_model_name2, sensor2_name, file_path=SENSOR2_CALIBRATION_OUTPUT)
         

@@ -16,7 +16,7 @@ def generate_aruco_marker(id, dictionary=ARUCO_DICT, size=2000):
     marker_image = aruco.generateImageMarker(aruco_dict, id, size)
 
     # Add circular dots to the marker image
-    marker_image = add_circular_dots(marker_image, 5, 5)
+    #marker_image = add_circular_dots(marker_image, 5, 5)
 
     # Save the generated marker as an image file
     file_name = os.path.join(calib_dir, f'aruco_marker_{id}.png')
@@ -76,7 +76,7 @@ def create_and_save_ChArUco_board(sq_len_meters, sq_pixels, margin_pixels, mrkr_
     img = aruco.CharucoBoard.generateImage(board, img_size, marginSize=margin_pixels)
 
     # Add circular dots to the marker image
-    img = add_circular_dots(img, dot_offset, 5, 8)
+    #img = add_circular_dots(img, dot_offset, 5, 8)
     #img = add_circular_dots(img, dot_offset, 5, 20)
 
     file_name = os.path.join(calib_dir, file_path)
