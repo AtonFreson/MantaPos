@@ -262,7 +262,7 @@ void IRAM_ATTR encoderISR() {
     uint8_t index = (lastState << 2) | currentState;
 
     // Update count based on state transition
-    encoderCount += lookup_table[index];
+    encoderCount -= lookup_table[index];
 
     // Save current state for next iteration
     lastState = currentState;
@@ -322,7 +322,7 @@ void dataPrint(ESP1588_Tracker& m) {
 
     // Calculate distance
     revolutions = (float)currentCount / COUNTS_PER_REV;
-    distance = currentCount * DISTANCE_PER_COUNT;
+    distance = (float)currentCount * DISTANCE_PER_COUNT;
 
     // Calculate speed
     unsigned long timeDelta = encoderTimestamp - lastMeasurementTime;
@@ -416,7 +416,7 @@ void dataPrint(ESP1588_Tracker& m) {
     snprintf(jsonBuffer, sizeof(jsonBuffer),
         "{\"mpu_unit\": \"%d\", "
 #if HAS_ENCODER
-        "\"encoder\": {\"timestamp\": %llu, \"revolutions\": %.3f, \"rpm\": %.3f, \"speed\": %.3f, \"distance\": %.3f}, "
+        "\"encoder\": {\"timestamp\": %llu, \"revolutions\": %.5f, \"rpm\": %.5f, \"speed\": %.5f, \"distance\": %.5f}, "
 #endif
 #if HAS_IMU
         "\"imu\": {\"timestamp\": %llu, \"acceleration\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}, \"gyroscope\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}}, "
@@ -473,6 +473,7 @@ void PrintPTPInfo(ESP1588_Tracker& t) {
     SerialW.printf("\n");
 }
 
+// Reset IMU Functions
 #if HAS_IMU
 void GetSmoothed() { 
     int16_t RawValue[6];
@@ -490,7 +491,6 @@ void GetSmoothed() {
 
     for (i = iAx; i <= iGz; i++) { Smoothed[i] = (Sums[i] + N/2) / N ; }
 } // GetSmoothed
-
 void SetOffsets(int TheOffsets[6]) {
     accelgyro.setXAccelOffset(TheOffsets [iAx]);
     accelgyro.setYAccelOffset(TheOffsets [iAy]);
@@ -499,7 +499,6 @@ void SetOffsets(int TheOffsets[6]) {
     accelgyro.setYGyroOffset (TheOffsets [iGy]);
     accelgyro.setZGyroOffset (TheOffsets [iGz]);
 } // SetOffsets
-
 void PullBracketsIn() {
     boolean AllBracketsNarrow;
     boolean StillWorking;
@@ -536,7 +535,6 @@ void PullBracketsIn() {
         } // closing in
     } // still working
 } // PullBracketsIn
-
 void PullBracketsOut() {
     boolean Done = false;
     int NextLowOffset[6];

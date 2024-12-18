@@ -11,7 +11,7 @@
 #define INDEX_PIN_Z_NEG 36    // Z-
  
 // Encoder configuration
-#define MPP_QUAD 0.00002623332163  // m per pulse. For linear sensors. Overwrites rotational measurements (e.g. PPR), set to 0 to use PPR.
+#define MPP_QUAD 0  // m per pulse. For linear sensors. Overwrites rotational measurements (e.g. PPR), set to 0 to use PPR.
 
 #define PPR 400  // Pulses Per Revolution
 #define WHEEL_DIAMETER_MM 82.53
@@ -29,6 +29,20 @@ volatile bool resetCommandReceived = false;
 volatile bool resetOccurred = false;
 const bool debugLock = false; // Set to true to ensure serial connection;
 // Otherwise just send anything to device when connected and serial output will enable itself.
+
+
+
+// Drift tracking variables
+const int MAX_DRIFT_SAMPLES = 50;
+long driftValues[MAX_DRIFT_SAMPLES];
+int driftCount = 0;
+long lastMinCount = 0;
+long currentMinCount = LONG_MAX;
+bool movingForward = true;
+long lastCount = 0;
+const long MAX_ALLOWED_DRIFT = 2000;
+
+
 
 // Network configuration
 IPAddress local_ip(169, 254, 178, 100);    // ESP32 static IP (adjusted to match PC's subnet)
@@ -251,6 +265,34 @@ void loop() {
         long currentCount = encoderCount;
         interrupts();
 
+        // Drift tracking logic
+        if (currentCount < currentMinCount) {
+            currentMinCount = currentCount;
+        }
+
+        // Detect direction change
+        if (currentCount > lastCount && !movingForward) {
+            movingForward = true;
+        // Modify the direction change detection code:
+        } else if (currentCount < lastCount && movingForward) {
+            movingForward = false;
+            if (driftCount < MAX_DRIFT_SAMPLES) {
+                if (driftCount > 0) {
+                    long drift = currentMinCount - lastMinCount;
+                    // Only store drift if it's within limits
+                    if (abs(drift) <= MAX_ALLOWED_DRIFT) {
+                        driftValues[driftCount] = drift;
+                        driftCount++;
+                    } // Skip this sample if drift is too large
+                } else {
+                    driftCount++; // Still increment on first run
+                }
+            }
+            lastMinCount = currentMinCount;
+            currentMinCount = LONG_MAX;
+        }
+        lastCount = currentCount;
+
         unsigned long timeDelta = currentTime - lastMeasurementTime;
 
         if (currentCount != lastEncoderCount && timeDelta > 0) {
@@ -265,16 +307,24 @@ void loop() {
             float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
             float rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
             float speed_m_per_s = countsPerSec * dist_count;
-
-            SerialW.print("Pul: ");
-            SerialW.print(currentCount);
-            SerialW.print("  ");
             
-            char buffer[150];
+            char buffer[250];
             snprintf(buffer, sizeof(buffer), 
-                    "Rev: %8.3f  RPM: %8.3f  Speed (m/s): %8.3f  Dist (m): %9.4f", 
-                    revolutions, rpm, speed_m_per_s, distance+0.4165);
-            SerialW.println(buffer);
+                    "Rev: %8.5f  RPM: %8.3f  Speed (m/s): %8.3f  Dist (m): %9.5f  Drifts: [", 
+                    revolutions, rpm, speed_m_per_s, distance);
+            SerialW.print(buffer);
+
+            // Print drift values
+            for (int i = 1; i < driftCount; i++) {
+                SerialW.print(driftValues[i]);
+                if (i < driftCount - 1) {
+                    SerialW.print(",");
+                }
+            }
+            SerialW.print("]");
+
+            SerialW.print("  Pul: ");
+            SerialW.println(currentCount);
 
             // Prepare UDP packet
             udp.beginPacket(udpAddress, udpPort);
