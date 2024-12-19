@@ -11,13 +11,13 @@
 #include <EEPROM.h>
 
 // The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Main", 2:"Z-axis Encoder - Second", 3:"Surface Pressure Sensor" 
-#define MPU_UNIT 0
+#define MPU_UNIT 2
 
 // Features available on this unit
 #define HAS_CLOCK       1
 #define HAS_ENCODER     1
-#define HAS_IMU         1
-#define HAS_PRESSURE    1
+#define HAS_IMU         0
+#define HAS_PRESSURE    0
 
 // Pin definitions for SCA50 differential signals
 #define ENCODER_PIN_A_POS 14  // A

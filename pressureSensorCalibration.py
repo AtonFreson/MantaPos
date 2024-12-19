@@ -24,7 +24,7 @@ import os
 import json
 
 # Configuration
-DATA_FILE = 'recordings/test recording - 12-13@19-16.json'
+DATA_FILE = 'recordings/pressure1 and 2 - 1meter - 12-19@18-28.json'
 sensor1_name = 'adc_value0'
 sensor2_name = 'adc_value1'
 
@@ -108,19 +108,19 @@ def create_models():
     """Create dictionary of regression models to test."""
     models = {
         'Linear': LinearRegression(),
-        'Poly2': make_pipeline(PolynomialFeatures(2), LinearRegression()),
-        'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
-        'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
+        #'Poly2': make_pipeline(PolynomialFeatures(2), LinearRegression()),
+        #'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
+        #'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
         'SVR': SVR(kernel='rbf'),
-        'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE),
-        'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE),
-        'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE),
-        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, verbosity=0),
+        #'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE, max_depth=5, min_samples_leaf=10),
+        #'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE),
+        #'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE),
+        #'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, verbosity=0),
         'MLP': MLPRegressor(random_state=RANDOM_STATE, max_iter=1000),
         'Ridge': Ridge(random_state=RANDOM_STATE),
         'Lasso': Lasso(random_state=RANDOM_STATE),
         'ElasticNet': ElasticNet(random_state=RANDOM_STATE),
-        'KNN': KNeighborsRegressor(n_neighbors=3),  # Adjusted n_neighbors
+        #'KNN': KNeighborsRegressor(n_neighbors=3),  # Adjusted n_neighbors
         'GaussianProcess': GaussianProcessRegressor(kernel=ConstantKernel(1.0) * RBF(1.0)),
         'RANSAC': RANSACRegressor(random_state=RANDOM_STATE),
         'TheilSen': TheilSenRegressor(random_state=RANDOM_STATE),
