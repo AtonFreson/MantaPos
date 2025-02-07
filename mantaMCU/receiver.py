@@ -394,7 +394,7 @@ def create_data_image(data_dicts):
     # Start/Stop Recording button
     record_button_color = (70, 70, 70) if not recording else (0, 0, 255)
     cv2.rectangle(img, (BUTTON_X1, RECORD_BUTTON_Y1), (BUTTON_X2, RECORD_BUTTON_Y2), record_button_color, -1)
-    record_button_text = "Stop Recording..." if recording else "Start Recording"
+    record_button_text = "Stop Recording..." if recording else "Record Selected"
     cv2.putText(img, record_button_text, (BUTTON_X1 + 20, RECORD_BUTTON_Y1 + 30), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (255, 255, 255), 2)
 

@@ -9,15 +9,16 @@
 #include <ArduinoJson.h>
 #include <ESP1588.h>
 #include <EEPROM.h>
+#include <math.h>
 
 // The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Main", 2:"Z-axis Encoder - Second", 3:"Surface Pressure Sensor" 
-#define MPU_UNIT 2
+#define MPU_UNIT 0
 
 // Features available on this unit
 #define HAS_CLOCK       1
 #define HAS_ENCODER     1
-#define HAS_IMU         0
-#define HAS_PRESSURE    0
+#define HAS_IMU         1
+#define HAS_PRESSURE    1
 
 // Pin definitions for SCA50 differential signals
 #define ENCODER_PIN_A_POS 14  // A
@@ -40,17 +41,17 @@ byte itr_freq = 0x00;
 // Encoder configuration
 #if MPU_UNIT == 1
 #define DISTANCE_PER_COUNT 0.00002625352510  // meter per count. For linear sensors.
-#define WHEEL_DIAMETER_MM 82.53
+#define WHEEL_DIAMETER_MM 100 // Guesstimated
 #define COUNTS_PER_REV (WHEEL_DIAMETER_MM * PI / 1000.0 / DISTANCE_PER_COUNT)
 
 #elif MPU_UNIT == 2
 #define DISTANCE_PER_COUNT 0.00002626184728  // meter per count. For linear sensors.
-#define WHEEL_DIAMETER_MM 82.53
+#define WHEEL_DIAMETER_MM 100 // Guesstimated
 #define COUNTS_PER_REV (WHEEL_DIAMETER_MM * PI / 1000.0 / DISTANCE_PER_COUNT)
 
 #else
 #define PPR 400  // Pulses Per Revolution
-#define WHEEL_DIAMETER_MM 82.53
+#define WHEEL_DIAMETER_MM 95.52240427
 #define COUNTS_PER_REV (PPR * 4)  // In quadrature mode
 #define DISTANCE_PER_COUNT (WHEEL_DIAMETER_MM * PI / 1000.0 / COUNTS_PER_REV)
 #endif
@@ -94,8 +95,8 @@ MPU6050 accelgyro(0x69); // Make sure AD0 is high by shorting R3 to VCC
 #if HAS_IMU
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
-float ax_mss, ay_mss, az_mss;
-float gx_rads, gy_rads, gz_rads;
+float accel[3] = {0, 0, 0};
+float gyro[3] = {0, 0, 0};
 
 const int iAx = 0, iAy = 1, iAz = 2, iGx = 3, iGy = 4, iGz = 5;
 
@@ -104,6 +105,8 @@ const int NFast = 1000;     // the bigger, the better (but slower)
 const int NSlow = 10000;
 int LowValue[6], HighValue[6], Smoothed[6], LowOffset[6], HighOffset[6], Target[6];
 int N;
+
+float R_transform[3][3] = { {1,0,0}, {0,1,0}, {0,0,1} };
 #endif
 
 #if HAS_ENCODER
@@ -228,7 +231,7 @@ uint64_t getEpochMillis64(bool difference = false) {
     if (shiftNs < 0) {shiftNs = 0;} else if (shiftNs > 1000000000ULL) {shiftNs = 999999999ULL;}    
 
     if (difference) {
-        return 500000000ULL + (int64_t)(millis_comp - (((uint64_t)now.unixtime() * 1000ULL) + shiftNs / 1000000ULL)) + storedOffset / 1000000ULL;
+        return 5000000000ULL + (int64_t)(millis_comp - (((uint64_t)now.unixtime() * 1000ULL) + shiftNs / 1000000ULL)) + storedOffset / 1000000ULL;
     }
     return (((uint64_t)now.unixtime() * 1000ULL) + shiftNs / 1000000ULL + storedOffset / 1000000ULL);
 #else
@@ -283,6 +286,90 @@ void IRAM_ATTR indexISR() {
 #if HAS_CLOCK
 void rtcSecondInterrupt() {
     localSecondOffsetNs = esp_timer_get_time() * 1000ULL;
+}
+#endif
+
+#if HAS_IMU
+void computeRotationMatrix() {
+    const int samples = 100;
+    float sumx = 0, sumy = 0, sumz = 0;
+    int16_t dummy_ax, dummy_ay, dummy_az, dummy_gx, dummy_gy, dummy_gz;
+    for (int i = 0; i < samples; i++) {
+         accelgyro.getMotion6(&dummy_ax, &dummy_ay, &dummy_az, &dummy_gx, &dummy_gy, &dummy_gz);
+         float ax_temp = (float)dummy_ax / 16384.0 * g;
+         float ay_temp = (float)dummy_ay / 16384.0 * g;
+         float az_temp = (float)dummy_az / 16384.0 * g;
+         sumx += ax_temp;
+         sumy += ay_temp;
+         sumz += az_temp;
+         delay(10);
+    }
+    float ax_avg = sumx / samples;
+    float ay_avg = sumy / samples;
+    float az_avg = sumz / samples;
+    
+    // Normalize measured gravity vector:
+    float norm = sqrt(ax_avg * ax_avg + ay_avg * ay_avg + az_avg * az_avg);
+    if (norm < 1e-6) norm = 1; // avoid division by zero
+    float gx0 = ax_avg / norm;
+    float gy0 = ay_avg / norm;
+    float gz0 = az_avg / norm;
+    
+    // Desired gravity direction is (0, 0, -1)
+    float dx = 0.0;
+    float dy = 0.0;
+    float dz = -1.0;
+    
+    // Compute cross product between measured gravity and desired gravity
+    float axis_x = gy0 * dz - gz0 * dy;  // = -gy0
+    float axis_y = gz0 * dx - gx0 * dz;    // = gx0
+    float axis_z = gx0 * dy - gy0 * dx;    // = 0
+    float axis_norm = sqrt(axis_x * axis_x + axis_y * axis_y + axis_z * axis_z);
+    
+    // If axis_norm is nearly zero, no rotation is needed
+    if (axis_norm < 1e-6) {
+       // Identity matrix
+       R_transform[0][0] = 1; R_transform[0][1] = 0; R_transform[0][2] = 0;
+       R_transform[1][0] = 0; R_transform[1][1] = 1; R_transform[1][2] = 0;
+       R_transform[2][0] = 0; R_transform[2][1] = 0; R_transform[2][2] = 1;
+       return;
+    }
+    axis_x /= axis_norm;
+    axis_y /= axis_norm;
+    axis_z /= axis_norm;
+    
+    // Compute angle between measured gravity and desired gravity
+    float dot = gx0 * dx + gy0 * dy + gz0 * dz; // equals -gz0
+    if (dot > 1.0) dot = 1.0;
+    if (dot < -1.0) dot = -1.0;
+    float angle = acos(dot);
+    
+    // Rodrigues' rotation formula:
+    float c = cos(angle);
+    float s = sin(angle);
+    float t = 1 - c;
+    
+    R_transform[0][0] = t * axis_x * axis_x + c;
+    R_transform[0][1] = t * axis_x * axis_y - s * axis_z;
+    R_transform[0][2] = t * axis_x * axis_z + s * axis_y;
+    
+    R_transform[1][0] = t * axis_x * axis_y + s * axis_z;
+    R_transform[1][1] = t * axis_y * axis_y + c;
+    R_transform[1][2] = t * axis_y * axis_z - s * axis_x;
+    
+    R_transform[2][0] = t * axis_x * axis_z - s * axis_y;
+    R_transform[2][1] = t * axis_y * axis_z + s * axis_x;
+    R_transform[2][2] = t * axis_z * axis_z + c;
+    
+    SerialW.println("Rotation matrix computed:");
+    SerialW.printf("[%.3f, %.3f, %.3f]\n", R_transform[0][0], R_transform[0][1], R_transform[0][2]);
+    SerialW.printf("[%.3f, %.3f, %.3f]\n", R_transform[1][0], R_transform[1][1], R_transform[1][2]);
+    SerialW.printf("[%.3f, %.3f, %.3f]\n", R_transform[2][0], R_transform[2][1], R_transform[2][2]);
+
+    // Save matrix to EEPROM
+    EEPROM.put(12, 0xA5A5A5A5);
+    EEPROM.put(16, R_transform);
+    EEPROM.commit();
 }
 #endif
 
@@ -348,12 +435,25 @@ void dataPrint(ESP1588_Tracker& m) {
     accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
     // Convert raw acceleration data to m/s², and raw gyroscope data to radians per second
-    ax_mss = (float)ax / 16384.0 * g;
-    ay_mss = (float)ay / 16384.0 * g;
-    az_mss = (float)az / 16384.0 * g;
-    gx_rads = (float)gx / 131.0 * (PI / 180.0);
-    gy_rads = (float)gy / 131.0 * (PI / 180.0);
-    gz_rads = (float)gz / 131.0 * (PI / 180.0);
+    accel[0] = (float)ax / 16384.0 * g;
+    accel[1] = (float)ay / 16384.0 * g;
+    accel[2] = (float)az / 16384.0 * g;
+    gyro[0] = (float)gx / 131.0 * (PI / 180.0);
+    gyro[1] = (float)gy / 131.0 * (PI / 180.0);
+    gyro[2] = (float)gz / 131.0 * (PI / 180.0);
+
+    float accel_rot[3] = {0, 0, 0};
+    float gyro_rot[3] = {0, 0, 0};
+    for (int i = 0; i < 3; i++) {
+        accel_rot[i] = R_transform[i][0]*accel[0] + R_transform[i][1]*accel[1] + R_transform[i][2]*accel[2];
+        gyro_rot[i] = R_transform[i][0]*gyro[0] + R_transform[i][1]*gyro[1] + R_transform[i][2]*gyro[2];
+    }
+    // In the rotated frame gravity should be (0,0,-g).
+    // Subtract gravity from the acceleration vector so that stationary the net acceleration is nearly zero.
+    // accel_rot[2] += g;  // subtracting (0,0,-g) is equivalent to adding g to the z-axis.
+    
+    accel[0] = accel_rot[0]; accel[1] = accel_rot[1]; accel[2] = accel_rot[2];
+    gyro[0] = gyro_rot[0];   gyro[1] = gyro_rot[1];   gyro[2] = gyro_rot[2];
 #endif
 
 #if HAS_CLOCK
@@ -385,13 +485,13 @@ void dataPrint(ESP1588_Tracker& m) {
         // IMU data printing
         Serial.println("IMU Data (T:" + String(imuTimestamp) + "):");
         Serial.print("Acceleration (m/s²): ");
-        Serial.print("X="); Serial.print(ax_mss, 5); Serial.print("\t");
-        Serial.print("Y="); Serial.print(ay_mss, 5); Serial.print("\t");
-        Serial.print("Z="); Serial.print(az_mss, 5); Serial.println();
+        Serial.print("X="); Serial.print(accel[0], 5); Serial.print("\t");
+        Serial.print("Y="); Serial.print(accel[1], 5); Serial.print("\t");
+        Serial.print("Z="); Serial.print(accel[2], 5); Serial.println();
         Serial.print("Gyroscope (rad/s): ");
-        Serial.print("X="); Serial.print(gx_rads, 5); Serial.print("\t");
-        Serial.print("Y="); Serial.print(gy_rads, 5); Serial.print("\t");
-        Serial.print("Z="); Serial.print(gz_rads, 5); Serial.println();
+        Serial.print("X="); Serial.print(gyro[0], 5); Serial.print("\t");
+        Serial.print("Y="); Serial.print(gyro[1], 5); Serial.print("\t");
+        Serial.print("Z="); Serial.print(gyro[2], 5); Serial.println();
         Serial.println();
 #endif
 
@@ -437,7 +537,7 @@ void dataPrint(ESP1588_Tracker& m) {
         encoderTimestamp, revolutions, rpm, speed, distance,
 #endif
 #if HAS_IMU
-        imuTimestamp, ax_mss, ay_mss, az_mss, gx_rads, gy_rads, gz_rads,
+        imuTimestamp, accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2],
 #endif
 #if HAS_CLOCK
         tempTimestamp, temperature,
@@ -447,7 +547,7 @@ void dataPrint(ESP1588_Tracker& m) {
 #endif
 #if HAS_CLOCK
         sync_clock ? "IN PROGRESS..." : "DONE/NOT STARTED", esp1588.GetLockStatus() ? "LOCKED" : "UNLOCKED", m.Healthy() ? "OK" : "BAD", esp1588.GetShortStatusString(),
-        (int64_t)(getEpochMillis64(true) - 500000000), (int64_t)(getEpochMillis64() / 1000ULL - storedSyncTime)
+        (int64_t)(getEpochMillis64(true) - 5000000000ULL), (int64_t)(getEpochMillis64() / 1000ULL - storedSyncTime)
 #endif
     );
 
@@ -648,6 +748,13 @@ void setup() {
     SerialW.printf("Stored sync time: %u\n", storedSyncTime);
     SerialW.printf("Stored offset: %lld\n", storedOffset);
 
+    // Load rotation matrix if valid
+    uint32_t flag;
+    EEPROM.get(12, flag);
+    if (flag == 0xA5A5A5A5) {
+        EEPROM.get(16, R_transform);
+    }
+
     esp1588.SetDomain(0);	// The domain of your PTP clock, 0 - 31
     esp1588.Begin();
 
@@ -676,7 +783,7 @@ void loop() {
     }
 
     esp1588.Loop();	//this needs to be called OFTEN, at least several times per second but more is better. forget controlling program flow with delay() in your code.
-    ESP1588_Tracker & m=esp1588.GetMaster();
+    ESP1588_Tracker & m = esp1588.GetMaster();
 
     if (millis() - lastPrintTime >= printInterval) {
         dataPrint(m);
@@ -794,6 +901,9 @@ void loop() {
                         PullBracketsIn();
 
                         SerialW.println("IMU Calibration complete.");
+                        
+                        // Compute the transformation rotation matrix using current stationary readings.
+                        computeRotationMatrix();
                     }
 #endif
                     break;
