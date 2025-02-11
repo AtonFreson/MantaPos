@@ -9,6 +9,7 @@ import genMarker
 from datetime import datetime
 import socket
 import json
+import threading
 
 # Initialize parameters
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
@@ -63,8 +64,44 @@ elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Single":
 
 # Setup UDP socket for sending camera position/rotation data
 UDP_IP = "127.0.0.1"   # Localhost
-UDP_PORT = 13233       # Port for sending data
+UDP_PORT = 13235       # Port for sending data
+UDP_IP_RECV = ""       # Receive data from any IP
+UDP_PORT_RECV = 13233  # Port for receiving data
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Create a UDP listener for receiving depth data for displaying in the GUI
+depth_main = None
+depth_sec = None
+stop_thread = False
+data_lock = threading.Lock()
+
+def depth_listener():
+    global depth_main, depth_sec
+    depth_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    depth_sock.bind((UDP_IP_RECV, UDP_PORT_RECV))  # Depth data listening port
+    depth_sock.settimeout(0.5)  # Set timeout for recvfrom
+
+    while not stop_thread:
+        try:
+            data, _ = depth_sock.recvfrom(4096)
+            with data_lock:
+                data_dict = json.loads(data.decode())
+                unit_num = int(data_dict.get("mpu_unit"))
+                if unit_num == 1:
+                    enc = data_dict.get("encoder")
+                    depth_main = float(enc["distance"])
+                elif unit_num == 2:
+                    enc = data_dict.get("encoder")
+                    depth_sec = float(enc["distance"])
+        except socket.timeout:
+            continue
+        except Exception as e:
+            print(f"Error in UDP listener: {e}")
+            break
+
+# Start depth UDP listener thread
+depth_thread = threading.Thread(target=depth_listener)
+depth_thread.start()
 
 # Generate and display the marker grid
 board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
@@ -205,7 +242,10 @@ while True:
         }
         sock.sendto(json.dumps(json_data).encode(), (UDP_IP, UDP_PORT))
 
-	 # Display the camera preview with position overlay
+    # Display the winch depth balancing reference
+    manta.display_balance_bar(frame, depth_main, depth_sec)
+
+	# Display the camera preview with overlays
     manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame) # Ensure this function exists
     cv2.imshow("Camera Preview with Position", frame)
 
@@ -213,6 +253,10 @@ while True:
     key = cv2.waitKey(1)
     if key == 27:
         break
+
+# Stop the depth listener thread
+stop_thread = True
+depth_thread.join()
 
 # Release the camera and close windows
 cap.release()

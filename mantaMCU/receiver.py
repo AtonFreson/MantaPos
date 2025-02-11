@@ -17,15 +17,20 @@ sys.path.insert(0, parent_dir)
 import mantaPosLib as manta
 
 # UDP socket parameters
-UDP_IP = ''           # Listen on all available network interfaces
-UDP_PORT = 13233      # Must match the udpPort in your Arduino code
-
-COMMAND_PORT = 13234  # Port for sending commands
+UDP_IP = ''             # Listen on all available network interfaces
+UDP_PORT = 13233        # Must match the udpPort in your Arduino code
+COMMAND_PORT = 13234    # Port for sending commands
+UDP_PORT_LOCAL = 13235  # Port for receiving data from local server
 
 # Create a UDP socket for receiving data
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind((UDP_IP, UDP_PORT))
-sock.settimeout(1.0)
+sock.settimeout(0.5)
+
+# Create a UDP socket for receiving data from local server
+sock_local = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_local.bind((UDP_IP, UDP_PORT_LOCAL))
+sock_local.settimeout(0.5)
 
 # Create a UDP socket for sending commands
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -47,6 +52,7 @@ pressure_sensors = ["pressure1", "pressure2", "pressure3", "pressure4"]
 # Shared variables and lock
 data_lock = threading.Lock()
 received_data = None
+received_data_local = None
 stop_threads = False
 button_pressed = False
 button_press_time = None
@@ -433,6 +439,19 @@ def udp_listener():
             print(f"Error in UDP listener: {e}")
             break
 
+def udp_listener_local():
+    global received_data_local
+    while not stop_threads:
+        try:
+            data, addr = sock_local.recvfrom(4096)
+            with data_lock:
+                received_data_local = (addr, data.decode())
+        except socket.timeout:
+            continue
+        except Exception as e:
+            print(f"Error in UDP listener: {e}")
+            break
+
 def mouse_callback(event, x, y, flags, param):
     global button_pressed, button_press_time, units_selected, wait_for_zero_position_selected
     global input_box_focused, recording, recording_filename, input_box_text, recording_units
@@ -549,11 +568,13 @@ def mouse_callback(event, x, y, flags, param):
                 print(f"Error sending command: {command_json}, error-code: {e}")
         elif command_dict:
             print("No units selected")
-            
+
 
 # Start UDP listener thread
 udp_thread = threading.Thread(target=udp_listener)
+udp_thread_local = threading.Thread(target=udp_listener_local)
 udp_thread.start()
+udp_thread_local.start()
 
 # Create OpenCV window
 cv2.namedWindow("Sensor Data", cv2.WINDOW_NORMAL)
@@ -585,17 +606,20 @@ try:
             elif key != 255 and key not in [27, 9, 10, 13, 8]:
                 input_box_text += chr(key)
 
-        new_data = None
+        new_datas = [None, None]
         with data_lock:
             if received_data:
-                addr, new_data = received_data
+                addr, new_datas[0] = received_data
                 received_data = None
+            if received_data_local:
+                addr, new_datas[1] = received_data_local
+                received_data_local = None
         
-        if new_data:
-            # Process incoming data
+        for new_data in new_datas:
+            if new_data is None:
+                continue                
             try:
                 data_dict = json.loads(new_data)
-                #print(f"Received data:\n{new_data}")
                 unit_num_str = data_dict.get("mpu_unit")
                 if unit_num_str is None:
                     print("Warning: 'mpu_unit' key missing in data")
@@ -669,8 +693,8 @@ finally:
 
     print("Exiting...")
 
-
     stop_threads = True
     udp_thread.join()
+    udp_thread_local.join()
     cv2.destroyAllWindows()
     sys.exit()

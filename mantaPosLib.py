@@ -333,6 +333,47 @@ def display_position(frame, tvec_list, rvec_list, marker_pos_rot, font=cv2.FONT_
     # Apply the overlay
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
+# Function to display a horizontal balance bar between the depth value of the left and right sides of the assembly
+def display_balance_bar(frame, depth_left, depth_right, bar_width=1800, bar_height=30, bar_color=(0, 255, 0),
+                        font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1.8, text_color=(0, 255, 0), thickness=2,
+                        alpha=0.5, rect_padding=(10, 10, 600, 400), sensitivity=0.5):
+    
+    # Check if the depth values are valid
+    if depth_left is None or depth_right is None:
+        return
+
+    # Calculate the balance bar length based on the depth values and sensitivity
+    total_depth = depth_left + depth_right
+    if total_depth == 0:
+        balance_bar_length = bar_width // 2  # Default to middle position if total depth is zero
+    else:
+        balance_bar_length = int(min((depth_left / total_depth) * bar_width * sensitivity, bar_width))
+
+    # Create a copy of the frame for overlay
+    overlay = frame.copy()
+
+    # Unpack rectangle bounds
+    x, y, w, h = rect_padding
+
+    # Draw the rectangle background for the bar area
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
+
+    # Calculate bar position at the bottom of the rectangle
+    bar_x = x + 20
+    bar_y = y + h - bar_height - 20
+
+    # Draw the horizontal balance bar background (white) and filled portion (bar_color)
+    cv2.rectangle(overlay, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (255, 255, 255), -1)
+    cv2.rectangle(overlay, (bar_x, bar_y), (bar_x + balance_bar_length, bar_y + bar_height), bar_color, -1)
+
+    # Put text on the overlay above the bar
+    cv2.putText(overlay, f"Sensitivity: {sensitivity:.2f}", (bar_x, bar_y - 110), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, f"Left: {depth_left:.3f}m", (bar_x, bar_y - 60), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, f"Right: {depth_right:.3f}m", (bar_x, bar_y - 10), font, font_scale, text_color, thickness)
+
+    # Apply the overlay
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
 # Computes the standard deviations (errors) for each pose parameter in the global coordinate system.
 def compute_pose_errors_global(rvec, tvec, object_points, image_points, camera_matrix, dist_coeffs,
                                marker_pos, marker_rot):
