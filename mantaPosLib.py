@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 import os
 import re
-from scipy.spatial.transform import Rotation as R
+'''from scipy.spatial.transform import Rotation as R
 import json
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, TheilSenRegressor
 from sklearn.svm import SVR
@@ -17,7 +17,7 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.linear_model import RANSACRegressor
 import xgboost as xgb
-from scipy.interpolate import BSpline
+from scipy.interpolate import BSpline'''
 import pickle
 
 # Function to extract the numerical index from the filename
@@ -334,44 +334,99 @@ def display_position(frame, tvec_list, rvec_list, marker_pos_rot, font=cv2.FONT_
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
 # Function to display a horizontal balance bar between the depth value of the left and right sides of the assembly
-def display_balance_bar(frame, depth_left, depth_right, bar_width=1800, bar_height=30, bar_color=(0, 255, 0),
-                        font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1.8, text_color=(0, 255, 0), thickness=2,
-                        alpha=0.5, rect_padding=(10, 10, 600, 400), sensitivity=0.5):
-    
-    # Check if the depth values are valid
-    if depth_left is None or depth_right is None:
-        return
+def display_balance_bar(frame, depth_left, depth_right, dev_max=120, bar_height=30, font=cv2.FONT_HERSHEY_SIMPLEX, 
+                        font_scale=1.0, text_color=(200, 200, 200), thickness=2, alpha=0.7):
+    frame_h, frame_w = frame.shape[:2]
+    bar_width = int(frame_w * 0.8)
+    bar_x = (frame_w - bar_width) // 2
+    bar_y = frame_h - bar_height - 10
 
-    # Calculate the balance bar length based on the depth values and sensitivity
-    total_depth = depth_left + depth_right
-    if total_depth == 0:
-        balance_bar_length = bar_width // 2  # Default to middle position if total depth is zero
-    else:
-        balance_bar_length = int(min((depth_left / total_depth) * bar_width * sensitivity, bar_width))
+    diff = depth_left - depth_right 
+    diff_mm = abs(diff) * 1000
 
-    # Create a copy of the frame for overlay
     overlay = frame.copy()
+    # Draw full bar area as red (outer zone)
+    cv2.rectangle(overlay, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (0, 0, 255), -1)
+    
+    # Define zones dimensions and draw middle zones: yellow on sides, green at center.
+    green_half = round(bar_width / 2 * 0.2 / 10) * 10
+    yellow_half = round(bar_width / 2 * 0.4 / 10) * 10
+    cv2.rectangle(overlay, (bar_x + (bar_width//2 - yellow_half), bar_y),
+                  (bar_x + (bar_width//2 - green_half), bar_y + bar_height), (0, 255, 255), -1)
+    cv2.rectangle(overlay, (bar_x + (bar_width//2 + green_half), bar_y),
+                  (bar_x + (bar_width//2 + yellow_half), bar_y + bar_height), (0, 255, 255), -1)
+    cv2.rectangle(overlay, (bar_x + (bar_width//2 - green_half), bar_y),
+                  (bar_x + (bar_width//2 + green_half), bar_y + bar_height), (0, 255, 0), -1)
 
-    # Unpack rectangle bounds
-    x, y, w, h = rect_padding
+    # Calculate indicator horizontal position with offset based on depth difference.
+    center_x = bar_x + bar_width // 2
+    normalized = max(-1, min(diff / (dev_max/1000), 1))
+    pixel_offset = int(normalized * (bar_width // 2))
+    indicator_x = center_x + pixel_offset
 
-    # Draw the rectangle background for the bar area
-    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
+    # Define indicator rectangle dimensions.
+    indicator_center = (indicator_x, bar_y + bar_height // 2)
+    rect_height = int(bar_height * 1.5)  # 50% taller than the bar
+    rect_width = int(bar_height * 0.5)   # width is 50% of bar height
+    top_left = (indicator_center[0] - rect_width//2, indicator_center[1] - rect_height//2)
+    bottom_right = (indicator_center[0] + rect_width//2, indicator_center[1] + rect_height//2)
+    radius = rect_width // 2  # round corners based on width
 
-    # Calculate bar position at the bottom of the rectangle
-    bar_x = x + 20
-    bar_y = y + h - bar_height - 20
+    # Draw the filled black rounded rectangle.
+    x1, y1 = top_left
+    x2, y2 = bottom_right
+    color = (230, 230, 230)
+    cv2.rectangle(overlay, (x1+radius, y1), (x2-radius, y2), color, -1)
+    cv2.rectangle(overlay, (x1, y1+radius), (x2, y2-radius), color, -1)
+    cv2.circle(overlay, (x1+radius, y1+radius), radius, color, -1)
+    cv2.circle(overlay, (x2-radius, y1+radius), radius, color, -1)
+    cv2.circle(overlay, (x1+radius, y2-radius), radius, color, -1)
+    cv2.circle(overlay, (x2-radius, y2-radius), radius, color, -1)
 
-    # Draw the horizontal balance bar background (white) and filled portion (bar_color)
-    cv2.rectangle(overlay, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (255, 255, 255), -1)
-    cv2.rectangle(overlay, (bar_x, bar_y), (bar_x + balance_bar_length, bar_y + bar_height), bar_color, -1)
+    # Draw white outline around the rectangle.
+    color = (255, 255, 255)
+    cv2.line(overlay, (x1+radius, y1), (x2-radius, y1), color, thickness, cv2.LINE_AA)
+    cv2.line(overlay, (x1+radius, y2), (x2-radius, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(overlay, (x1, y1+radius), (x1, y2-radius), color, thickness, cv2.LINE_AA)
+    cv2.line(overlay, (x2, y1+radius), (x2, y2-radius), color, thickness, cv2.LINE_AA)
+    cv2.ellipse(overlay, (x1+radius, y1+radius), (radius, radius), 180, 0, 90, color, thickness, cv2.LINE_AA)
+    cv2.ellipse(overlay, (x2-radius, y1+radius), (radius, radius), 270, 0, 90, color, thickness, cv2.LINE_AA)
+    cv2.ellipse(overlay, (x1+radius, y2-radius), (radius, radius), 90, 0, 90, color, thickness, cv2.LINE_AA)
+    cv2.ellipse(overlay, (x2-radius, y2-radius), (radius, radius), 0, 0, 90, color, thickness, cv2.LINE_AA)
 
-    # Put text on the overlay above the bar
-    cv2.putText(overlay, f"Sensitivity: {sensitivity:.2f}", (bar_x, bar_y - 110), font, font_scale, text_color, thickness)
-    cv2.putText(overlay, f"Left: {depth_left:.3f}m", (bar_x, bar_y - 60), font, font_scale, text_color, thickness)
-    cv2.putText(overlay, f"Right: {depth_right:.3f}m", (bar_x, bar_y - 10), font, font_scale, text_color, thickness)
+    # Format texts and place them in the bar.
+    left_text = f"{depth_left:.3f}m"
+    right_text = f"{depth_right:.3f}m"
+    diff_text = f"{diff_mm:.1f}mm"
+    (_, th_left), _ = cv2.getTextSize(left_text, font, font_scale, thickness)
+    (tw_right, _), _ = cv2.getTextSize(right_text, font, font_scale, thickness)
+    (tw_diff, _), _ = cv2.getTextSize(diff_text, font, font_scale, thickness)
+    text_y = bar_y + (bar_height + th_left) // 2
+    cv2.putText(overlay, left_text, (bar_x + 5, text_y), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, right_text, (bar_x + bar_width - tw_right - 5, text_y), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, diff_text, (bar_x + (bar_width - tw_diff) // 2, text_y), font, font_scale, text_color, thickness)
+    
+    # Add centered text above the balance bar.
+    balancing_text = "Winch depth balancing"
+    (text_width, _), _ = cv2.getTextSize(balancing_text, font, font_scale, thickness)
+    text_x = bar_x + (bar_width - text_width) // 2
+    text_y_above = bar_y - 10
+    cv2.putText(overlay, balancing_text, (text_x, text_y_above), font, font_scale, (0, 255, 0), thickness)
 
-    # Apply the overlay
+    # Add text on the left above the bar
+    left_text_label = "Lower Main"
+    (left_text_width, _), _ = cv2.getTextSize(left_text_label, font, font_scale, thickness)
+    left_text_x = bar_x + 10
+    left_text_y_above = bar_y - 10
+    cv2.putText(overlay, left_text_label, (left_text_x, left_text_y_above), font, font_scale, (0, 255, 0), thickness)
+
+    # Add text on the right above the bar
+    right_text_label = "Lower Sec"
+    (right_text_width, _), _ = cv2.getTextSize(right_text_label, font, font_scale, thickness)
+    right_text_x = bar_x + bar_width - right_text_width - 10
+    right_text_y_above = bar_y - 10
+    cv2.putText(overlay, right_text_label, (right_text_x, right_text_y_above), font, font_scale, (0, 255, 0), thickness)
+    
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
 # Computes the standard deviations (errors) for each pose parameter in the global coordinate system.
