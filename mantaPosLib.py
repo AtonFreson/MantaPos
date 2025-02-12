@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 import os
 import re
-'''from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R
 import json
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, TheilSenRegressor
 from sklearn.svm import SVR
@@ -17,7 +17,7 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.linear_model import RANSACRegressor
 import xgboost as xgb
-from scipy.interpolate import BSpline'''
+from scipy.interpolate import BSpline
 import pickle
 
 # Function to extract the numerical index from the filename
