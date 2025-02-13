@@ -334,8 +334,11 @@ def display_position(frame, tvec_list, rvec_list, marker_pos_rot, font=cv2.FONT_
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
 # Function to display a horizontal balance bar between the depth value of the left and right sides of the assembly
-def display_balance_bar(frame, depth_left, depth_right, dev_max=120, bar_height=30, font=cv2.FONT_HERSHEY_SIMPLEX, 
-                        font_scale=1.0, text_color=(200, 200, 200), thickness=2, alpha=0.7):
+def display_balance_bar(frame, depth_left, depth_right, dev_max=120, bar_height=80, font=cv2.FONT_HERSHEY_SIMPLEX, 
+                        font_scale=1.0, text_color=(0, 0, 0), thickness=2, alpha=0.7):
+    if depth_left is None or depth_right is None:
+        return
+
     frame_h, frame_w = frame.shape[:2]
     bar_width = int(frame_w * 0.8)
     bar_x = (frame_w - bar_width) // 2
@@ -367,7 +370,7 @@ def display_balance_bar(frame, depth_left, depth_right, dev_max=120, bar_height=
     # Define indicator rectangle dimensions.
     indicator_center = (indicator_x, bar_y + bar_height // 2)
     rect_height = int(bar_height * 1.5)  # 50% taller than the bar
-    rect_width = int(bar_height * 0.5)   # width is 50% of bar height
+    rect_width = int(min(bar_width * 0.01, bar_height * 0.5))   # width is 50% of bar height or 1% of bar width
     top_left = (indicator_center[0] - rect_width//2, indicator_center[1] - rect_height//2)
     bottom_right = (indicator_center[0] + rect_width//2, indicator_center[1] + rect_height//2)
     radius = rect_width // 2  # round corners based on width
@@ -410,22 +413,20 @@ def display_balance_bar(frame, depth_left, depth_right, dev_max=120, bar_height=
     balancing_text = "Winch depth balancing"
     (text_width, _), _ = cv2.getTextSize(balancing_text, font, font_scale, thickness)
     text_x = bar_x + (bar_width - text_width) // 2
-    text_y_above = bar_y - 10
+    text_y_above = bar_y - 25
     cv2.putText(overlay, balancing_text, (text_x, text_y_above), font, font_scale, (0, 255, 0), thickness)
 
     # Add text on the left above the bar
     left_text_label = "Lower Main"
     (left_text_width, _), _ = cv2.getTextSize(left_text_label, font, font_scale, thickness)
     left_text_x = bar_x + 10
-    left_text_y_above = bar_y - 10
-    cv2.putText(overlay, left_text_label, (left_text_x, left_text_y_above), font, font_scale, (0, 255, 0), thickness)
+    cv2.putText(overlay, left_text_label, (left_text_x, text_y_above), font, font_scale, (0, 255, 0), thickness)
 
     # Add text on the right above the bar
     right_text_label = "Lower Sec"
     (right_text_width, _), _ = cv2.getTextSize(right_text_label, font, font_scale, thickness)
     right_text_x = bar_x + bar_width - right_text_width - 10
-    right_text_y_above = bar_y - 10
-    cv2.putText(overlay, right_text_label, (right_text_x, right_text_y_above), font, font_scale, (0, 255, 0), thickness)
+    cv2.putText(overlay, right_text_label, (right_text_x, text_y_above), font, font_scale, (0, 255, 0), thickness)
     
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 

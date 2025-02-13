@@ -24,11 +24,13 @@ UDP_PORT_LOCAL = 13235  # Port for receiving data from local server
 
 # Create a UDP socket for receiving data
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # allow multiple binds
 sock.bind((UDP_IP, UDP_PORT))
 sock.settimeout(0.5)
 
 # Create a UDP socket for receiving data from local server
 sock_local = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_local.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # allow multiple binds
 sock_local.bind((UDP_IP, UDP_PORT_LOCAL))
 sock_local.settimeout(0.5)
 

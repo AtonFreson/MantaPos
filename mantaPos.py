@@ -78,6 +78,7 @@ data_lock = threading.Lock()
 def depth_listener():
     global depth_main, depth_sec
     depth_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    depth_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # allow multiple binds
     depth_sock.bind((UDP_IP_RECV, UDP_PORT_RECV))  # Depth data listening port
     depth_sock.settimeout(0.5)  # Set timeout for recvfrom
 
@@ -243,7 +244,7 @@ while True:
         sock.sendto(json.dumps(json_data).encode(), (UDP_IP, UDP_PORT))
 
     # Display the winch depth balancing reference
-    manta.display_balance_bar(frame, depth_main, depth_sec)
+    manta.display_balance_bar(frame, depth_main, depth_sec, font_scale=8, thickness=20, bar_height=500)
 
 	# Display the camera preview with overlays
     manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame) # Ensure this function exists
