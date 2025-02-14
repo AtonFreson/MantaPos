@@ -56,13 +56,12 @@ def load_and_prepare_data(file_path):
         if item.get('mpu_unit') == 0 and 'pressure' in item and sensor1_name in item['pressure'] and sensor2_name in item['pressure']:
             pressure_data.append({
                 'timestamp': item['pressure']['timestamp'],
-                'sensor0': item['pressure'][sensor1_name],
-                'sensor1': item['pressure'][sensor2_name]
+                'sensor1': item['pressure'][sensor1_name],
+                'sensor2': item['pressure'][sensor2_name],
             })
-             
     if not depth_data or not pressure_data:
         raise ValueError("No valid sensor or depth data found in the JSON file")
-
+        
     # Convert to Pandas DataFrame
     depth_df = pd.DataFrame(depth_data)
     pressure_df = pd.DataFrame(pressure_data)
@@ -75,8 +74,8 @@ def load_and_prepare_data(file_path):
     depth_x = depth_df['timestamp'].values
     depth_y = depth_df['distance'].values
     pressure_x = pressure_df['timestamp'].values
-    pressure_sensor_0 = pressure_df['sensor0'].values
     pressure_sensor_1 = pressure_df['sensor1'].values
+    pressure_sensor_2 = pressure_df['sensor2'].values
     
     if len(np.unique(depth_x)) < 2:
         raise ValueError("Not enough unique timestamps in the depth data for interpolation.")
@@ -86,8 +85,8 @@ def load_and_prepare_data(file_path):
 
     # Filter pressure data to only those within the depth range
     pressure_x = pressure_x[valid_mask]
-    pressure_sensor_0 = pressure_sensor_0[valid_mask]
     pressure_sensor_1 = pressure_sensor_1[valid_mask]
+    pressure_sensor_2 = pressure_sensor_2[valid_mask]
 
     if len(pressure_x) == 0:
         raise ValueError("No pressure data falls within the depth timestamp range; nothing to interpolate.")
@@ -149,34 +148,34 @@ def load_and_prepare_data(file_path):
         return good_mask, removed_pass2_idx, removed_pass3_idx
 
     # Filter sensor data for sensor 1
-    mask0, r2_idx0, r3_idx0 = filter_sensor(interpolated_depths, pressure_sensor_0)
-    print(f"Sensor 1: Removed {len(r2_idx0)} outliers and then {len(r3_idx0)} excess points.")
-    filtered_depth0 = interpolated_depths[mask0]
-    filtered_sensor0 = np.array(pressure_sensor_0)[mask0]
+    sensor1_mask, r2_idx1, r3_idx1 = filter_sensor(interpolated_depths, pressure_sensor_1)
+    print(f"Sensor 1: Removed {len(r2_idx1)} outliers and then {len(r3_idx1)} excess points.")
+    filtered_depth1 = interpolated_depths[sensor1_mask]
+    filtered_sensor1 = np.array(pressure_sensor_1)[sensor1_mask]
     # Compute removed datapoints for sensor 1 from original arrays
-    removed_green0_depth = interpolated_depths[r2_idx0]
-    removed_green0_sensor = np.array(pressure_sensor_0)[r2_idx0]
-    removed_yellow0_depth = interpolated_depths[r3_idx0]
-    removed_yellow0_sensor = np.array(pressure_sensor_0)[r3_idx0]
-
-    # Filter sensor data for sensor 2
-    mask1, r2_idx1, r3_idx1 = filter_sensor(interpolated_depths, pressure_sensor_1)
-    print(f"Sensor 2: Removed {len(r2_idx1)} outliers and then {len(r3_idx1)} excess points.")
-    filtered_depth1 = interpolated_depths[mask1]
-    filtered_sensor1 = np.array(pressure_sensor_1)[mask1]
     removed_green1_depth = interpolated_depths[r2_idx1]
     removed_green1_sensor = np.array(pressure_sensor_1)[r2_idx1]
     removed_yellow1_depth = interpolated_depths[r3_idx1]
     removed_yellow1_sensor = np.array(pressure_sensor_1)[r3_idx1]
 
+    # Filter sensor data for sensor 2
+    sensor2_mask, r2_idx2, r3_idx2 = filter_sensor(interpolated_depths, pressure_sensor_2)
+    print(f"Sensor 2: Removed {len(r2_idx2)} outliers and then {len(r3_idx2)} excess points.")
+    filtered_depth2 = interpolated_depths[sensor2_mask]
+    filtered_sensor2 = np.array(pressure_sensor_2)[sensor2_mask]
+    removed_green2_depth = interpolated_depths[r2_idx2]
+    removed_green2_sensor = np.array(pressure_sensor_2)[r2_idx2]
+    removed_yellow2_depth = interpolated_depths[r3_idx2]
+    removed_yellow2_sensor = np.array(pressure_sensor_2)[r3_idx2]
+
     # Return filtered data along with removed datapoints for each sensor.
     return (
-        filtered_depth0, filtered_sensor0, 
-        removed_green0_depth, removed_green0_sensor, 
-        removed_yellow0_depth, removed_yellow0_sensor,
-        filtered_depth1, filtered_sensor1,
-        removed_green1_depth, removed_green1_sensor,
-        removed_yellow1_depth, removed_yellow1_sensor
+        filtered_depth1, filtered_sensor1, 
+        removed_green1_depth, removed_green1_sensor, 
+        removed_yellow1_depth, removed_yellow1_sensor,
+        filtered_depth2, filtered_sensor2,
+        removed_green2_depth, removed_green2_sensor,
+        removed_yellow2_depth, removed_yellow2_sensor
     )
 
 def create_models():
@@ -186,18 +185,19 @@ def create_models():
         'Poly2': make_pipeline(PolynomialFeatures(2), LinearRegression()),
         'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
         'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
-        'SVR': SVR(kernel='rbf'),
-        'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE, max_depth=5, min_samples_leaf=10),
-        'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE, n_estimators=100, max_depth=3, min_samples_leaf=5),
-        'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE, n_estimators=50, max_depth=3),
-        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, n_estimators=50, max_depth=3, reg_alpha=0.1, reg_lambda=1, verbosity=0),
-        'MLP': MLPRegressor(random_state=RANDOM_STATE, max_iter=1000),
+        'Poly20': make_pipeline(PolynomialFeatures(20), LinearRegression()),
+        'SVR': SVR(kernel='rbf', C=5, gamma=0.005, epsilon=0.1),
+        'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE, max_depth=5, min_samples_leaf=5),
+        'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE, n_estimators=70, max_depth=6, min_samples_leaf=15, max_features=0.8), 
+        'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE, n_estimators=150, max_depth=3, learning_rate=0.05), 
+        'RANSAC': RANSACRegressor(random_state=RANDOM_STATE, estimator=DecisionTreeRegressor(max_depth=5), min_samples=0.5),
+        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, n_estimators=100, max_depth=3, reg_alpha=0.1, reg_lambda=1, verbosity=0),
+        'MLP': MLPRegressor(random_state=RANDOM_STATE, hidden_layer_sizes=(50,), max_iter=1000),
         'Ridge': Ridge(random_state=RANDOM_STATE),
         'Lasso': Lasso(random_state=RANDOM_STATE),
         'ElasticNet': ElasticNet(random_state=RANDOM_STATE),
-        'KNN': KNeighborsRegressor(n_neighbors=10),
-        'GaussianProcess': GaussianProcessRegressor(kernel=ConstantKernel(1.0) * RBF(1.0)),
-        'RANSAC': RANSACRegressor(random_state=RANDOM_STATE),
+        'KNN': KNeighborsRegressor(n_neighbors=10, weights='uniform'),
+        'GaussianProcess': GaussianProcessRegressor(kernel=ConstantKernel(1.0, constant_value_bounds="fixed") * RBF(1.0, length_scale_bounds=(0.1, 10.0)), alpha=0.1),
         'TheilSen': TheilSenRegressor(random_state=RANDOM_STATE),
         'Spline3': lambda x, y: UnivariateSpline(x, y, k=2)
     }
@@ -236,11 +236,6 @@ def evaluate_models(X_train, X_test, y_train, y_test, models):
                     raise ValueError("Not enough unique data points for Spline3.")
                 
             else:
-                if name == 'KNN':
-                    n_samples = len(X_train)
-                    if n_samples < 5:
-                        model.set_params(n_neighbors=max(1, n_samples - 1))
-                        
                 model.fit(X_train.reshape(-1, 1), y_train)
                 y_pred = model.predict(X_test.reshape(-1, 1))
                 
@@ -291,7 +286,7 @@ def visualize_models(X_train, X_test, y_train, y_test, results, fitted_models, r
     
     # Create a plot range
     X_all = np.concatenate([X_train, X_test])
-    X_plot = np.linspace(X_all.min(), X_all.max(), 200).reshape(-1, 1)
+    X_plot = np.linspace(X_all.min(), X_all.max(), 1000).reshape(-1, 1)
     
     plt.figure(figsize=(10, 6))
     
@@ -397,29 +392,30 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
 if __name__ == "__main__":
     try:
         # Unpack filtered data and removed points for both sensors.
-        (depth0, sensor0, 
-         green_depth0, green_sensor0, yellow_depth0, yellow_sensor0,
-         depth1, sensor1,
-         green_depth1, green_sensor1, yellow_depth1, yellow_sensor1) = load_and_prepare_data(DATA_FILE)
+        (depth1, sensor1, 
+         green_depth1, green_sensor1, yellow_depth1, yellow_sensor1,
+         depth2, sensor2,
+         green_depth2, green_sensor2, yellow_depth2, yellow_sensor2) = load_and_prepare_data(DATA_FILE)
         
         # Create and evaluate models for both sensors
-        models = create_models()
+        models_1 = create_models()
+        models_2 = create_models()
         
         # Split data for both sensors
         X1_train, X1_test, y1_train, y1_test = train_test_split(
-            sensor0, depth0, test_size=TEST_SIZE, random_state=RANDOM_STATE)
-        X2_train, X2_test, y2_train, y2_test = train_test_split(
             sensor1, depth1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+        X2_train, X2_test, y2_train, y2_test = train_test_split(
+            sensor2, depth2, test_size=TEST_SIZE, random_state=RANDOM_STATE)
         
         # Evaluate models for sensor 1
         print("\nEvaluating models for Sensor 1 (adc_value0)...")
         results1, fitted_models1, best_model1, best_model_name1 = evaluate_models(
-            X1_train, X1_test, y1_train, y1_test, models)
+            X1_train, X1_test, y1_train, y1_test, models_1)
         
         # Evaluate models for sensor 2
         print("Evaluating models for Sensor 2 (adc_value1)...\n")
         results2, fitted_models2, best_model2, best_model_name2 = evaluate_models(
-            X2_train, X2_test, y2_train, y2_test, models)
+            X2_train, X2_test, y2_train, y2_test, models_2)
         
         # Save calibration models using pickle
         save_calibration(best_model1, best_model_name1, sensor1_name, file_path=SENSOR1_CALIBRATION_OUTPUT)
@@ -444,16 +440,16 @@ if __name__ == "__main__":
         print("\nVisualizing top 3 models for Sensor 1 (adc_value0)...")
         visualize_models(
             X1_train, X1_test, y1_train, y1_test, results1, fitted_models1,
-            removed_green=(green_depth0, green_sensor0),
-            removed_yellow=(yellow_depth0, yellow_sensor0)
+            removed_green=(green_depth1, green_sensor1),
+            removed_yellow=(yellow_depth1, yellow_sensor1)
         )
         
         # Visualize the top 3 models for sensor 2
         print("Visualizing top 3 models for Sensor 2 (adc_value1)...")
         visualize_models(
             X2_train, X2_test, y2_train, y2_test, results2, fitted_models2,
-            removed_green=(green_depth1, green_sensor1),
-            removed_yellow=(yellow_depth1, yellow_sensor1)
+            removed_green=(green_depth2, green_sensor2),
+            removed_yellow=(yellow_depth2, yellow_sensor2)
         )
         
         
