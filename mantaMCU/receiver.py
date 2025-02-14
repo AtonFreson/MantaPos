@@ -7,6 +7,7 @@ import numpy as np
 from datetime import datetime
 import os
 import traceback
+import ctypes  # <-- new import for Windows power management
 
 # Add parent directory to the path to import mantaPosLib
 from inspect import getsourcefile
@@ -15,6 +16,14 @@ current_dir = os.path.dirname(current_path)
 parent_dir = current_dir[:current_dir.rfind(os.path.sep)]
 sys.path.insert(0, parent_dir)
 import mantaPosLib as manta
+
+# Prevent Windows from entering sleep mode
+if os.name == 'nt':
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+    ES_DISPLAY_REQUIRED = 0x00000002
+    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+    print("Windows execution state set to keep screen active.")
 
 # UDP socket parameters
 UDP_IP = ''             # Listen on all available network interfaces
