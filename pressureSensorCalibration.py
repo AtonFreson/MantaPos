@@ -24,7 +24,7 @@ import os
 import json
 
 # Configuration
-DATA_FILE = 'recordings/pressure1 and 2 - 1meter - 12-19@18-28.json'
+DATA_FILE = 'recordings/depth 1 2 calib - 02-13@16-33.json'
 sensor1_name = 'adc_value0'
 sensor2_name = 'adc_value1'
 
@@ -32,7 +32,7 @@ CALIBRATION_FOLDER = 'calibrations/pressure_calibrations/'
 os.makedirs(CALIBRATION_FOLDER, exist_ok=True)
 SENSOR1_CALIBRATION_OUTPUT = os.path.join(CALIBRATION_FOLDER, f"{sensor1_name}_calibration.pkl")
 SENSOR2_CALIBRATION_OUTPUT = os.path.join(CALIBRATION_FOLDER, f"{sensor2_name}_calibration.pkl")
-TEST_SIZE = 0.2
+TEST_SIZE = 0.5
 RANDOM_STATE = 42
 
 
@@ -99,28 +99,103 @@ def load_and_prepare_data(file_path):
             interpolated_depths = interp_func(pressure_x)
         except ValueError as e:
             raise ValueError(f"Error interpolating depth data: {e}")
-        
-        return np.array(interpolated_depths), np.array(pressure_sensor_0), np.array(pressure_sensor_1)
     else:
         raise ValueError("Not enough unique timestamps in the encoder data for interpolation.")
+    
+    # Helper function to filter sensor data
+    def filter_sensor(depth_vals, sensor_vals):
+        window_size = 0.01
+        half_window = 0.005
+        ranges = []
+        counts = []
+        d_min, d_max = depth_vals.min(), depth_vals.max()
+        # First pass: compute sensor range and count per window.
+        current = d_min
+        while current < d_max:
+            win_mask = (depth_vals >= current) & (depth_vals < current + window_size)
+            count = np.sum(win_mask)
+            if count > 0:
+                win_data = sensor_vals[win_mask]
+                ranges.append(win_data.max() - win_data.min())
+                counts.append(count)
+            current += window_size
+        avg_range = np.mean(ranges) if ranges else 0
+        avg_count = np.mean(counts) if counts else 0
+        threshold = int(avg_count) if avg_count >= 1 else 1
+
+        # Second pass: mark outliers deviating too much
+        good_mask = np.ones(len(sensor_vals), dtype=bool)
+        for i in range(len(sensor_vals)):
+            local_mask = (depth_vals >= depth_vals[i] - half_window) & (depth_vals <= depth_vals[i] + half_window)
+            if np.any(local_mask):
+                local_median = np.median(sensor_vals[local_mask])
+                if abs(sensor_vals[i] - local_median) > avg_range:
+                    good_mask[i] = False
+        removed_pass2_idx = np.where(~good_mask)[0]
+
+        # Third pass: remove random excess points in each window.
+        removed_pass3_idx = []
+        current = d_min
+        while current < d_max:
+            win_mask = (depth_vals >= current) & (depth_vals < current + window_size)
+            valid_indices = np.where(win_mask & good_mask)[0]
+            if valid_indices.size > threshold:
+                remove_count = valid_indices.size - threshold
+                remove_indices = np.random.choice(valid_indices, size=remove_count, replace=False)
+                removed_pass3_idx.extend(remove_indices.tolist())
+                good_mask[remove_indices] = False
+            current += window_size
+        removed_pass3_idx = np.array(removed_pass3_idx)
+        return good_mask, removed_pass2_idx, removed_pass3_idx
+
+    # Filter sensor data for sensor 1
+    mask0, r2_idx0, r3_idx0 = filter_sensor(interpolated_depths, pressure_sensor_0)
+    print(f"Sensor 1: Removed {len(r2_idx0)} outliers and then {len(r3_idx0)} excess points.")
+    filtered_depth0 = interpolated_depths[mask0]
+    filtered_sensor0 = np.array(pressure_sensor_0)[mask0]
+    # Compute removed datapoints for sensor 1 from original arrays
+    removed_green0_depth = interpolated_depths[r2_idx0]
+    removed_green0_sensor = np.array(pressure_sensor_0)[r2_idx0]
+    removed_yellow0_depth = interpolated_depths[r3_idx0]
+    removed_yellow0_sensor = np.array(pressure_sensor_0)[r3_idx0]
+
+    # Filter sensor data for sensor 2
+    mask1, r2_idx1, r3_idx1 = filter_sensor(interpolated_depths, pressure_sensor_1)
+    print(f"Sensor 2: Removed {len(r2_idx1)} outliers and then {len(r3_idx1)} excess points.")
+    filtered_depth1 = interpolated_depths[mask1]
+    filtered_sensor1 = np.array(pressure_sensor_1)[mask1]
+    removed_green1_depth = interpolated_depths[r2_idx1]
+    removed_green1_sensor = np.array(pressure_sensor_1)[r2_idx1]
+    removed_yellow1_depth = interpolated_depths[r3_idx1]
+    removed_yellow1_sensor = np.array(pressure_sensor_1)[r3_idx1]
+
+    # Return filtered data along with removed datapoints for each sensor.
+    return (
+        filtered_depth0, filtered_sensor0, 
+        removed_green0_depth, removed_green0_sensor, 
+        removed_yellow0_depth, removed_yellow0_sensor,
+        filtered_depth1, filtered_sensor1,
+        removed_green1_depth, removed_green1_sensor,
+        removed_yellow1_depth, removed_yellow1_sensor
+    )
 
 def create_models():
-    """Create dictionary of regression models to test."""
+    # Update models to reduce overfitting by adjusting hyperparameters.
     models = {
         'Linear': LinearRegression(),
-        #'Poly2': make_pipeline(PolynomialFeatures(2), LinearRegression()),
-        #'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
-        #'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
+        'Poly2': make_pipeline(PolynomialFeatures(2), LinearRegression()),
+        'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
+        'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
         'SVR': SVR(kernel='rbf'),
-        #'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE, max_depth=5, min_samples_leaf=10),
-        #'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE),
-        #'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE),
-        #'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, verbosity=0),
+        'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE, max_depth=5, min_samples_leaf=10),
+        'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE, n_estimators=100, max_depth=3, min_samples_leaf=5),
+        'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE, n_estimators=50, max_depth=3),
+        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, n_estimators=50, max_depth=3, reg_alpha=0.1, reg_lambda=1, verbosity=0),
         'MLP': MLPRegressor(random_state=RANDOM_STATE, max_iter=1000),
         'Ridge': Ridge(random_state=RANDOM_STATE),
         'Lasso': Lasso(random_state=RANDOM_STATE),
         'ElasticNet': ElasticNet(random_state=RANDOM_STATE),
-        #'KNN': KNeighborsRegressor(n_neighbors=3),  # Adjusted n_neighbors
+        'KNN': KNeighborsRegressor(n_neighbors=10),
         'GaussianProcess': GaussianProcessRegressor(kernel=ConstantKernel(1.0) * RBF(1.0)),
         'RANSAC': RANSACRegressor(random_state=RANDOM_STATE),
         'TheilSen': TheilSenRegressor(random_state=RANDOM_STATE),
@@ -201,11 +276,13 @@ def save_calibration(model, model_name, sensor_type, file_path):
         print(f"Error saving calibration model: {str(e)}")
 
 
-def visualize_models(X_train, X_test, y_train, y_test, results, fitted_models):
+# Modify visualize_models to accept removed datapoints (green and yellow)
+def visualize_models(X_train, X_test, y_train, y_test, results, fitted_models, removed_green, removed_yellow):
     """
     Visualize the data points and the fitted lines for the top 3 models based on R² score.
     Plots the training and testing data points and prediction lines of the best and two runner-ups.
     """
+    # removed_green and removed_yellow are tuples: (green_depth, green_sensor) and (yellow_depth, yellow_sensor)
     # Sort models by R² in descending order
     sorted_models = sorted(results.items(), key=lambda kv: kv[1]['r2'], reverse=True)
     
@@ -217,6 +294,14 @@ def visualize_models(X_train, X_test, y_train, y_test, results, fitted_models):
     X_plot = np.linspace(X_all.min(), X_all.max(), 200).reshape(-1, 1)
     
     plt.figure(figsize=(10, 6))
+    
+    # Plot removed points: green unfilled circles (high deviation) and yellow unfilled circles (excess)
+    green_depth, green_sensor = removed_green
+    yellow_depth, yellow_sensor = removed_yellow
+    plt.scatter(green_sensor, green_depth, facecolors='none', edgecolors='green', s=50, 
+                linewidths=1.5, label='High Deviation Removed')
+    plt.scatter(yellow_sensor, yellow_depth, facecolors='none', edgecolors='yellow', s=50, 
+                linewidths=1.5, label='Excess Points Removed')
     
     # Plot data points
     plt.scatter(X_train, y_train, color='blue', alpha=0.7, label='Train Data')
@@ -233,7 +318,7 @@ def visualize_models(X_train, X_test, y_train, y_test, results, fitted_models):
             y_plot = model.predict(X_plot)
         
         colors = ['green', 'orange', 'purple']  # For up to 3 lines
-        plt.plot(X_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.3f})")
+        plt.plot(X_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.6f})")
     
     plt.title("Data vs. Top 3 Model Predictions")
     plt.xlabel("Sensor Value")
@@ -278,9 +363,9 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
             y_plot = model(X1_plot.ravel())
         else:
             y_plot = model.predict(X1_plot)
-        ax1.plot(X1_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.3f})")
+        ax1.plot(X1_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.6f})")
 
-    ax1.set_title("Sensor 0 (adc_value0) - Top 3 Models")
+    ax1.set_title("Sensor 1 (adc_value0) - Top 3 Models")
     ax1.set_xlabel("Sensor Value")
     ax1.set_ylabel("Depth")
     ax1.legend()
@@ -297,9 +382,9 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
             y_plot = model(X2_plot.ravel())
         else:
             y_plot = model.predict(X2_plot)
-        ax2.plot(X2_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.3f})")
+        ax2.plot(X2_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.6f})")
 
-    ax2.set_title("Sensor 1 (adc_value1) - Top 3 Models")
+    ax2.set_title("Sensor 2 (adc_value1) - Top 3 Models")
     ax2.set_xlabel("Sensor Value")
     ax2.set_ylabel("Depth")
     ax2.legend()
@@ -309,27 +394,30 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
     plt.show()
 
 
-def main():
+if __name__ == "__main__":
     try:
-        # Load data
-        depth, sensor1, sensor2 = load_and_prepare_data(DATA_FILE)
+        # Unpack filtered data and removed points for both sensors.
+        (depth0, sensor0, 
+         green_depth0, green_sensor0, yellow_depth0, yellow_sensor0,
+         depth1, sensor1,
+         green_depth1, green_sensor1, yellow_depth1, yellow_sensor1) = load_and_prepare_data(DATA_FILE)
         
         # Create and evaluate models for both sensors
         models = create_models()
         
         # Split data for both sensors
         X1_train, X1_test, y1_train, y1_test = train_test_split(
-            sensor1, depth, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+            sensor0, depth0, test_size=TEST_SIZE, random_state=RANDOM_STATE)
         X2_train, X2_test, y2_train, y2_test = train_test_split(
-            sensor2, depth, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+            sensor1, depth1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
         
-        # Evaluate models for sensor 0
-        print("Evaluating models for Sensor 0 (adc_value0)...")
+        # Evaluate models for sensor 1
+        print("\nEvaluating models for Sensor 1 (adc_value0)...")
         results1, fitted_models1, best_model1, best_model_name1 = evaluate_models(
             X1_train, X1_test, y1_train, y1_test, models)
         
-        # Evaluate models for sensor 1
-        print("\nEvaluating models for Sensor 1 (adc_value1)...")
+        # Evaluate models for sensor 2
+        print("Evaluating models for Sensor 2 (adc_value1)...\n")
         results2, fitted_models2, best_model2, best_model_name2 = evaluate_models(
             X2_train, X2_test, y2_train, y2_test, models)
         
@@ -338,30 +426,36 @@ def main():
         save_calibration(best_model2, best_model_name2, sensor2_name, file_path=SENSOR2_CALIBRATION_OUTPUT)
         
         print("\nCalibration Results:")
-        print(f"Sensor 0 (adc_value0) - Best Model: {best_model_name1}")
-        print(f"R² Score: {results1[best_model_name1]['r2']:.4f}")
+        print(f"Sensor 1 (adc_value0) - Best Model: {best_model_name1}")
+        print(f"R² Score: {results1[best_model_name1]['r2']:.6f}")
         print(f"RMSE: {results1[best_model_name1]['rmse']:.4f}")
         
-        print(f"\nSensor 1 (adc_value1) - Best Model: {best_model_name2}")
-        print(f"R² Score: {results2[best_model_name2]['r2']:.4f}")
+        print(f"\nSensor 2 (adc_value1) - Best Model: {best_model_name2}")
+        print(f"R² Score: {results2[best_model_name2]['r2']:.6f}")
         print(f"RMSE: {results2[best_model_name2]['rmse']:.4f}")
         
-        # Visualize the top 3 models for both sensors side-by-side
-        visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_models1,
-                              X2_train, X2_test, y2_train, y2_test, results2, fitted_models2)
         
-        '''
+        # Visualize the top 3 models for both sensors side-by-side
+        #visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_models1,
+        #                      X2_train, X2_test, y2_train, y2_test, results2, fitted_models2)
+        
+        
         # Visualize the top 3 models for sensor 1
         print("\nVisualizing top 3 models for Sensor 1 (adc_value0)...")
-        visualize_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_models1)
+        visualize_models(
+            X1_train, X1_test, y1_train, y1_test, results1, fitted_models1,
+            removed_green=(green_depth0, green_sensor0),
+            removed_yellow=(yellow_depth0, yellow_sensor0)
+        )
         
         # Visualize the top 3 models for sensor 2
         print("Visualizing top 3 models for Sensor 2 (adc_value1)...")
-        visualize_models(X2_train, X2_test, y2_train, y2_test, results2, fitted_models2)
-        '''
+        visualize_models(
+            X2_train, X2_test, y2_train, y2_test, results2, fitted_models2,
+            removed_green=(green_depth1, green_sensor1),
+            removed_yellow=(yellow_depth1, yellow_sensor1)
+        )
+        
         
     except Exception as e:
         print(f"Error in calibration process: {str(e)}")
-
-if __name__ == "__main__":
-    main()
