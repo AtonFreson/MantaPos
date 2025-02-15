@@ -7,7 +7,6 @@ from datetime import datetime
 import os
 import re
 from scipy.spatial.transform import Rotation as R
-import json
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, TheilSenRegressor
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
@@ -19,6 +18,8 @@ from sklearn.linear_model import RANSACRegressor
 import xgboost as xgb
 from scipy.interpolate import BSpline
 import pickle
+import struct
+from multiprocessing import shared_memory
 
 # Function to extract the numerical index from the filename
 def extract_index(filename):
@@ -868,3 +869,92 @@ class PressureSensorSystem:
         except Exception as e:
             print(f"Error calculating depth: {str(e)}")
             return None
+
+# Class to handle shared memory for depth values, used to send values from receiver to mantaPos
+class DepthSharedMemory:
+    SHM_NAME = "mantaPos_depth"
+    SIZE = 16  # 2 x 8-byte floats
+    
+    def __init__(self, create=False):
+        self.create = create
+        self.connect()
+    
+    def connect(self):
+        """Attempt to connect to or create shared memory"""
+        try:
+            if self.create:
+                try:
+                    # Try to cleanup any existing shared memory with same name
+                    existing = shared_memory.SharedMemory(name=self.SHM_NAME)
+                    existing.close()
+                    existing.unlink()
+                except FileNotFoundError:
+                    pass
+                # Create new shared memory block
+                self.shm = shared_memory.SharedMemory(name=self.SHM_NAME, create=True, size=self.SIZE)
+                self.shm.buf[:self.SIZE] = struct.pack('dd', 99.999999, 99.999999)
+            else:
+                # Try to attach to existing shared memory
+                self.shm = shared_memory.SharedMemory(name=self.SHM_NAME)
+        except Exception as e:
+            print(f"Shared memory error: {e}")
+            self.shm = None
+
+    def write_depths(self, depth_main, depth_sec):
+        """Write depths with reconnection attempt on failure"""
+        if self.shm is None and not self.create:
+            # Try to reconnect if we're the consumer
+            self.connect()
+        
+        if self.shm is None:
+            return False
+            
+        try:
+            packed = struct.pack('dd', depth_main if depth_main is not None else 99.999999,
+                                     depth_sec  if depth_sec  is not None else 99.999999)
+            self.shm.buf[:self.SIZE] = packed
+            return True
+        except Exception as e:
+            print(f"Error writing to shared memory: {e}")
+            self.shm = None  # Mark for reconnection attempt
+            return False
+
+    def get_depth(self):
+        """Read depths with reconnection attempt on failure"""
+        if self.shm is None and not self.create:
+            # Try to reconnect if we're the consumer
+            self.connect()
+            
+        if self.shm is None:
+            return None, None
+            
+        try:
+            data = self.shm.buf[:self.SIZE]
+            depth_main, depth_sec = struct.unpack('dd', data)
+            if depth_main == 99.999999: depth_main = None
+            if depth_sec == 99.999999: depth_sec = None
+            return depth_main, depth_sec
+        except Exception as e:
+            print(f"Error reading from shared memory: {e}")
+            self.shm = None  # Mark for reconnection attempt
+            return None, None
+
+    def close(self):
+        if self.shm is not None:
+            try:
+                self.shm.close()
+            except Exception as e:
+                print(f"Error closing shared memory: {e}")
+
+    def unlink(self):
+        if self.shm is not None:
+            try:
+                self.shm.unlink()
+            except Exception as e:
+                print(f"Error unlinking shared memory: {e}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

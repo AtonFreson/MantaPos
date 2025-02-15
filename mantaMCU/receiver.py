@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 import os
 import traceback
-import ctypes  # <-- new import for Windows power management
+import ctypes
 
 # Add parent directory to the path to import mantaPosLib
 from inspect import getsourcefile
@@ -29,19 +29,11 @@ if os.name == 'nt':
 UDP_IP = ''             # Listen on all available network interfaces
 UDP_PORT = 13233        # Must match the udpPort in your Arduino code
 COMMAND_PORT = 13234    # Port for sending commands
-UDP_PORT_LOCAL = 13235  # Port for receiving data from local server
 
 # Create a UDP socket for receiving data
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # allow multiple binds
 sock.bind((UDP_IP, UDP_PORT))
 sock.settimeout(0.5)
-
-# Create a UDP socket for receiving data from local server
-sock_local = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_local.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # allow multiple binds
-sock_local.bind((UDP_IP, UDP_PORT_LOCAL))
-sock_local.settimeout(0.5)
 
 # Create a UDP socket for sending commands
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -450,19 +442,6 @@ def udp_listener():
             print(f"Error in UDP listener: {e}")
             break
 
-def udp_listener_local():
-    global received_data_local
-    while not stop_threads:
-        try:
-            data, addr = sock_local.recvfrom(4096)
-            with data_lock:
-                received_data_local = (addr, data.decode())
-        except socket.timeout:
-            continue
-        except Exception as e:
-            print(f"Error in UDP listener: {e}")
-            break
-
 def mouse_callback(event, x, y, flags, param):
     global button_pressed, button_press_time, units_selected, wait_for_zero_position_selected
     global input_box_focused, recording, recording_filename, input_box_text, recording_units
@@ -583,9 +562,7 @@ def mouse_callback(event, x, y, flags, param):
 
 # Start UDP listener thread
 udp_thread = threading.Thread(target=udp_listener)
-udp_thread_local = threading.Thread(target=udp_listener_local)
 udp_thread.start()
-udp_thread_local.start()
 
 # Create OpenCV window
 cv2.namedWindow("Sensor Data", cv2.WINDOW_NORMAL)
@@ -603,6 +580,9 @@ for i in range(0,4):
         print(f"Error loading calibration for sensor {pressure_sensors[i]}")
     else:
         print(f"Loaded calibration for sensor {pressure_sensors[i]}")
+
+# Initialize shared memory for depth values (as creator)
+depth_shared = manta.DepthSharedMemory(create=True)
 
 # Main loop
 try:
@@ -673,6 +653,18 @@ try:
             
             last_recording_save_time = datetime.now()
 
+        # Get depth values from data_dicts if they exist
+        depth_main = None
+        depth_sec = None
+        
+        if data_dicts[1].get("encoder"):  # Unit 1: Main encoder
+            depth_main = data_dicts[1]["encoder"].get("distance")
+        if data_dicts[2].get("encoder"):  # Unit 2: Secondary encoder
+            depth_sec = data_dicts[2]["encoder"].get("distance")
+            
+        # Write depth values to shared memory
+        depth_shared.write_depths(depth_main, depth_sec)
+
         # Create and show image
         img = create_data_image(data_dicts)
         cv2.imshow("Sensor Data", img)
@@ -702,10 +694,12 @@ finally:
         except Exception as e:
             print("Error writing to file:", e)
 
-    print("Exiting...")
+    print("Cleaning up shared memory...")
+    depth_shared.close()
+    depth_shared.unlink()  # Only the creator should unlink
 
+    print("Exiting...")
     stop_threads = True
     udp_thread.join()
-    udp_thread_local.join()
     cv2.destroyAllWindows()
     sys.exit()
