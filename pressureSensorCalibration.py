@@ -22,6 +22,9 @@ warnings.filterwarnings('ignore')
 import matplotlib.pyplot as plt
 import os
 import json
+import tensorflow as tf
+from sklearn.preprocessing import StandardScaler
+from scipy import optimize
 
 # Configuration
 DATA_FILE = 'recordings/depth 3 4 calib - 02-14@15-40.json'
@@ -32,7 +35,7 @@ CALIBRATION_FOLDER = 'calibrations/pressure_calibrations/'
 os.makedirs(CALIBRATION_FOLDER, exist_ok=True)
 SENSOR1_CALIBRATION_OUTPUT = os.path.join(CALIBRATION_FOLDER, f"{sensor1_name}_calibration.pkl")
 SENSOR2_CALIBRATION_OUTPUT = os.path.join(CALIBRATION_FOLDER, f"{sensor2_name}_calibration.pkl")
-TEST_SIZE = 0.5
+TEST_SIZE = 0.001
 RANDOM_STATE = 42
 
 
@@ -178,30 +181,168 @@ def load_and_prepare_data(file_path):
         removed_yellow2_depth, removed_yellow2_sensor
     )
 
+# Piecewise linear regression model
+class PiecewiseLinearAlternate:
+    def __init__(self, max_segments=20, allowEdits=False):
+        self.max_segments = max_segments
+        self.px = None
+        self.py = None
+        self.allowEdits = allowEdits
+ 
+    def segments_fit(self, X, Y, count):
+        xmin = X.min()
+        xmax = X.max()
+        ymin = Y.min()
+        ymax = Y.max()    
+
+        seg = np.full(count - 1, (xmax - xmin) / count)
+
+        px_init = np.r_[np.r_[xmin, seg].cumsum(), xmax]
+        py_init = np.array([Y[np.abs(X - x) < (xmax - xmin) * 0.01].mean() for x in px_init])
+
+        def func(p):
+            seg = p[:count - 1]
+            py = p[count - 1:]
+            px = np.r_[np.r_[xmin, seg].cumsum(), xmax]
+            return px, py
+
+        def err(p):
+            px, py = func(p)
+            Y2 = np.interp(X, px, py)
+            return np.mean((Y - Y2)**2)
+
+        r = optimize.minimize(
+            err, x0=np.r_[seg, py_init], method='SLSQP', 
+            bounds=[(0, None)] * len(seg) + [(ymin, ymax)] * len(py_init), 
+            constraints=[
+                optimize.LinearConstraint([1] * len(seg) + [0] * len(py_init), 0, xmax - xmin)
+            ])
+        
+        return func(r.x)
+
+    def fit(self, X, y):
+        # Flatten input arrays to ensure 1D data
+        X = np.asarray(X).ravel()
+        y = np.asarray(y).ravel()
+        self.px, self.py = self.segments_fit(X, y, self.max_segments)
+
+        if self.allowEdits:
+            # Save self.px and self.py to a temporary text file in JSON format
+            temp_file = "piecewise_params.json"
+            params = {
+                "px": self.px.tolist() if hasattr(self.px, "tolist") else self.px,
+                "py": self.py.tolist() if hasattr(self.py, "tolist") else self.py
+            }
+            with open(temp_file, "w") as f:
+                json.dump(params, f, indent=4)
+            print(f"Parameters saved to {temp_file}. You may edit the file if you wish.")
+            input("Press Enter to continue and load parameters...")
+
+            # Load the parameters back from the file
+            with open(temp_file, "r") as f:
+                params = json.load(f)
+            self.px = np.array(params.get("px", self.px))
+            self.py = np.array(params.get("py", self.py))
+            print("Parameters loaded. Continuing with model fitting...")
+
+    def predict(self, X):
+        return np.interp(X, self.px, self.py)
+
+# Piecewise linear regression model
+class PiecewiseLinear:
+    def __init__(self, min_width=25, max_width=100):
+        self.min_width = min_width
+        self.max_width = max_width
+        self.segments = []      # Each segment: (start, end, slope, intercept)
+        self.boundaries = []    # List of segment boundaries
+
+    def fit(self, X, y):
+        X = np.array(X).ravel()
+        y = np.array(y).ravel()
+        idx = np.argsort(X)
+        X_sorted = X[idx]
+        y_sorted = y[idx]
+        self.segments = []
+        self.boundaries = [X_sorted[0]]
+        while self.boundaries[-1] < X_sorted[-1]:
+            seg_start = self.boundaries[-1]
+            seg_end_limit = seg_start + self.max_width
+            seg_mask = (X_sorted >= seg_start) & (X_sorted <= seg_end_limit)
+            seg_indices = np.where(seg_mask)[0]
+            if len(seg_indices) == 0:
+                break
+            if X_sorted[seg_indices[-1]] - seg_start < self.min_width:
+                seg_end = min(seg_start + self.min_width, X_sorted[-1])
+                seg_points_mask = (X_sorted >= seg_start) & (X_sorted <= seg_end)
+                seg_indices = np.where(seg_points_mask)[0]
+            else:
+                seg_end = X_sorted[seg_indices[-1]]
+            X_seg = X_sorted[seg_indices]
+            y_seg = y_sorted[seg_indices]
+            if self.boundaries[0] == seg_start:
+                m, c = np.polyfit(X_seg, y_seg, 1)
+            else:
+                yb = self._predict_at(seg_start)
+                denom = np.sum((X_seg - seg_start)**2)
+                m = np.sum((X_seg - seg_start) * (y_seg - yb)) / denom if denom != 0 else 0
+                c = yb - m * seg_start
+            self.segments.append((seg_start, seg_end, m, c))
+            self.boundaries.append(seg_end)
+            if seg_end >= X_sorted[-1]:
+                break
+                
+    def _predict_at(self, x):
+        for seg in self.segments:
+            start, end, m, c = seg
+            if start <= x <= end:
+                return m * x + c
+        if self.segments:
+            m, c = self.segments[-1][2], self.segments[-1][3]
+            return m * x + c
+        return None
+
+    def predict(self, X):
+        X = np.array(X).ravel()
+        return np.array([self._predict_at(x) for x in X])
+
 def create_models():
-    # Update models to reduce overfitting by adjusting hyperparameters.
     models = {
         'Linear': LinearRegression(),
-        'Poly2': make_pipeline(PolynomialFeatures(2), LinearRegression()),
-        'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
-        'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
-        'Poly20': make_pipeline(PolynomialFeatures(20), LinearRegression()),
-        'SVR': SVR(kernel='rbf', C=5, gamma=0.005, epsilon=0.1),
-        'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE, max_depth=5, min_samples_leaf=5),
-        'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE, n_estimators=70, max_depth=6, min_samples_leaf=15, max_features=0.8), 
-        'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE, n_estimators=150, max_depth=3, learning_rate=0.05), 
-        'RANSAC': RANSACRegressor(random_state=RANDOM_STATE, estimator=DecisionTreeRegressor(max_depth=5), min_samples=0.5),
-        'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, n_estimators=100, max_depth=3, reg_alpha=0.1, reg_lambda=1, verbosity=0),
-        'MLP': MLPRegressor(random_state=RANDOM_STATE, hidden_layer_sizes=(50,), max_iter=1000),
-        'Ridge': Ridge(random_state=RANDOM_STATE),
-        'Lasso': Lasso(random_state=RANDOM_STATE),
-        'ElasticNet': ElasticNet(random_state=RANDOM_STATE),
-        'KNN': KNeighborsRegressor(n_neighbors=10, weights='uniform'),
-        'GaussianProcess': GaussianProcessRegressor(kernel=ConstantKernel(1.0, constant_value_bounds="fixed") * RBF(1.0, length_scale_bounds=(0.1, 10.0)), alpha=0.1),
-        'TheilSen': TheilSenRegressor(random_state=RANDOM_STATE),
-        'Spline3': lambda x, y: UnivariateSpline(x, y, k=2)
+        #'Poly2': make_pipeline(PolynomialFeatures(2), LinearRegression()),
+        #'Poly3': make_pipeline(PolynomialFeatures(3), LinearRegression()),
+        #'Poly4': make_pipeline(PolynomialFeatures(4), LinearRegression()),
+        #'Poly20': make_pipeline(PolynomialFeatures(20), LinearRegression()),
+        #'SVR': SVR(kernel='rbf', C=5, gamma=0.005, epsilon=0.1),
+        #'DecisionTree': DecisionTreeRegressor(random_state=RANDOM_STATE, max_depth=5, min_samples_leaf=5),
+        #'RandomForest': RandomForestRegressor(random_state=RANDOM_STATE, n_estimators=70, max_depth=6, min_samples_leaf=15, max_features=0.8), 
+        #'GradientBoosting': GradientBoostingRegressor(random_state=RANDOM_STATE, n_estimators=150, max_depth=3, learning_rate=0.05), 
+        #'RANSAC': RANSACRegressor(random_state=RANDOM_STATE, estimator=DecisionTreeRegressor(max_depth=5), min_samples=0.5),
+        #'XGBoost': xgb.XGBRegressor(random_state=RANDOM_STATE, n_estimators=100, max_depth=3, reg_alpha=0.1, reg_lambda=1, verbosity=0),
+        #'MLP': MLPRegressor(random_state=RANDOM_STATE, hidden_layer_sizes=(50,), max_iter=1000),
+        #'Ridge': Ridge(random_state=RANDOM_STATE),
+        #'Lasso': Lasso(random_state=RANDOM_STATE),
+        #'ElasticNet': ElasticNet(random_state=RANDOM_STATE),
+        #'KNN': KNeighborsRegressor(n_neighbors=10, weights='uniform'),
+        #'GaussianProcess': GaussianProcessRegressor(kernel=ConstantKernel(1.0, constant_value_bounds="fixed") * RBF(1.0, length_scale_bounds=(0.1, 10.0)), alpha=0.1),
+        #'TheilSen': TheilSenRegressor(random_state=RANDOM_STATE),
+        #'Spline3': lambda x, y: UnivariateSpline(x, y, k=2),
+        #'KerasNN': create_nn_model(),
+        'PiecewiseLinear': PiecewiseLinear(20, 200),
+        'PiecewiseLinearAlternate': PiecewiseLinearAlternate(max_segments=100)#200
     }
     return models
+
+def create_nn_model():
+    # Create the ML based neural network model
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(units=1, activation='linear', input_shape=[1]),
+        tf.keras.layers.Dense(units=64, activation='relu'),
+        tf.keras.layers.Dense(units=64, activation='relu'),
+        tf.keras.layers.Dense(units=1, activation='linear')
+    ])
+    model.compile(loss='mse', optimizer='adam')
+    model.summary()
+    return model
 
 def evaluate_models(X_train, X_test, y_train, y_test, models):
     """Evaluate all models and return the best one."""
@@ -234,6 +375,31 @@ def evaluate_models(X_train, X_test, y_train, y_test, models):
                         best_model_name = name
                 else:
                     raise ValueError("Not enough unique data points for Spline3.")
+                
+            elif name == 'KerasNN':
+                scaler_x = StandardScaler()
+                scaler_y = StandardScaler()
+                X_train_norm = scaler_x.fit_transform(X_train.reshape(-1, 1))
+                X_test_norm = scaler_x.transform(X_test.reshape(-1, 1))
+                y_train_norm = scaler_y.fit_transform(y_train.reshape(-1, 1))
+                
+                # Train the Keras neural network on normalized data
+                model.fit(X_train_norm, y_train_norm, epochs=100, verbose=1)
+                
+                # Store scalers in the model for later un-normalization
+                model.scaler_x = scaler_x
+                model.scaler_y = scaler_y
+                
+                y_pred_norm = model.predict(X_test_norm).ravel()
+                y_pred = scaler_y.inverse_transform(y_pred_norm.reshape(-1, 1)).ravel()
+                r2 = r2_score(y_test, y_pred)
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                results[name] = {'r2': r2, 'rmse': rmse}
+                fitted_models[name] = model
+                if r2 > best_score:
+                    best_score = r2
+                    best_model = model
+                    best_model_name = name
                 
             else:
                 model.fit(X_train.reshape(-1, 1), y_train)
@@ -308,6 +474,10 @@ def visualize_models(X_train, X_test, y_train, y_test, results, fitted_models, r
         if model_name == 'Spline3':
             # Spline model: use model(X_plot.ravel()) directly
             y_plot = model(X_plot.ravel())
+        elif model_name == 'KerasNN' and hasattr(model, 'scaler_x') and hasattr(model, 'scaler_y'):
+            X_plot_norm = model.scaler_x.transform(X_plot)
+            y_plot_norm = model.predict(X_plot_norm)
+            y_plot = model.scaler_y.inverse_transform(y_plot_norm)
         else:
             # Other models: use predict method
             y_plot = model.predict(X_plot)
@@ -356,6 +526,10 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
         model = fitted_models1[model_name]
         if model_name == 'Spline3':
             y_plot = model(X1_plot.ravel())
+        elif model_name == 'KerasNN' and hasattr(model, 'scaler_x') and hasattr(model, 'scaler_y'):
+            X1_plot_norm = model.scaler_x.transform(X1_plot)
+            y_plot_norm = model.predict(X1_plot_norm)
+            y_plot = model.scaler_y.inverse_transform(y_plot_norm)
         else:
             y_plot = model.predict(X1_plot)
         ax1.plot(X1_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.6f})")
@@ -375,6 +549,10 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
         model = fitted_models2[model_name]
         if model_name == 'Spline3':
             y_plot = model(X2_plot.ravel())
+        elif model_name == 'KerasNN' and hasattr(model, 'scaler_x') and hasattr(model, 'scaler_y'):
+            X2_plot_norm = model.scaler_x.transform(X2_plot)
+            y_plot_norm = model.predict(X2_plot_norm)
+            y_plot = model.scaler_y.inverse_transform(y_plot_norm)
         else:
             y_plot = model.predict(X2_plot)
         ax2.plot(X2_plot, y_plot, color=colors[i], linewidth=2, label=f"{model_name} (R²={metrics['r2']:.6f})")
@@ -409,13 +587,17 @@ if __name__ == "__main__":
         
         # Evaluate models for sensor 1
         print("\nEvaluating models for Sensor 1 (adc_value0)...")
+        #results1, fitted_models1, best_model1, best_model_name1 = evaluate_models(
+        #    X1_train, X1_test, y1_train, y1_test, models_1)
         results1, fitted_models1, best_model1, best_model_name1 = evaluate_models(
-            X1_train, X1_test, y1_train, y1_test, models_1)
+            X1_train,X1_train, y1_train,y1_train, models_1)
         
         # Evaluate models for sensor 2
         print("Evaluating models for Sensor 2 (adc_value1)...\n")
+        #results2, fitted_models2, best_model2, best_model_name2 = evaluate_models(
+        #    X2_train, X2_test, y2_train, y2_test, models_2)
         results2, fitted_models2, best_model2, best_model_name2 = evaluate_models(
-            X2_train, X2_test, y2_train, y2_test, models_2)
+            X2_train,X2_train, y2_train,y2_train, models_2)
         
         # Save calibration models using pickle
         save_calibration(best_model1, best_model_name1, sensor1_name, file_path=SENSOR1_CALIBRATION_OUTPUT)
