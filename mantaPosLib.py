@@ -7,19 +7,10 @@ from datetime import datetime
 import os
 import re
 from scipy.spatial.transform import Rotation as R
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, TheilSenRegressor
-from sklearn.svm import SVR
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.neural_network import MLPRegressor
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.linear_model import RANSACRegressor
-import xgboost as xgb
-from scipy.interpolate import BSpline
 import pickle
 import struct
 from multiprocessing import shared_memory
+from pressureSensorCalibration import PiecewiseLinearAlternate
 
 # Function to extract the numerical index from the filename
 def extract_index(filename):
@@ -795,81 +786,45 @@ def frame_crop(frame, crop_size=0.7):
     return frame
 
 class PressureSensorSystem:
-    def __init__(self, surface_sensor_depth=0.02):
-        self.surface_sensor_depth = surface_sensor_depth
-        self.sensor_models = [None, None, None, None]
-        self.reference_surface_pressure = None
-        
-    def load_calibration(self, sensor_num, sensor_file='calibrations/pressure_calibrations/pressure1_calibration.pkl'):
-        """Load calibration model using pickle."""
+    def __init__(self):
+        self.sensor_models = {"bottom": None, "surface": None}
+        self.sensor_values = {"bottom": None, "surface": None}
+    
+    # Unpickle a calibration file and load the model
+    def load_calibration(self, sensor="bottom", sensor_file='calibrations/pressure_calibrations/pressure1_calibration.pkl'):
         try:
             with open(sensor_file, 'rb') as f:
                 calibration_data = pickle.load(f)
-            
-            self.sensor_models[sensor_num] = self.initialize_model(calibration_data)
+            self.sensor_models[sensor] = calibration_data['model']
             return True
                 
         except Exception as e:
             print(f"Error loading calibration: {str(e)}")
             return False
     
-    def initialize_model(self, calibration_data):
-        """Initialize a model with loaded pickle data."""
-        model_name = calibration_data['model_name']
-        model = calibration_data['model']
-        
-        return model
-    
-    def calibrate_surface_pressure(self, surface_sensor_value):
-        """Calibrate system using current surface pressure reading."""
-        try:
-            self.reference_surface_pressure = surface_sensor_value
-            return True
-        except Exception as e:
-            print(f"Error calibrating surface pressure: {str(e)}")
-            return False
-    
-    def convert_raw(self, sensor_num, sensor_value):
-        model = self.sensor_models[sensor_num]
+    def convert_raw(self, sensor, sensor_value):
+        model = self.sensor_models[sensor]
         if model is None:
             return None
         
-        if callable(self.sensor_models[sensor_num]):
+        if callable(self.sensor_models[sensor]):
             depth = model(sensor_value)
         else: #  Assume a sklearn-like model
             depth = model.predict([[sensor_value]])[0]
-        return depth#round(depth, 5)
+        return depth
     
-    def get_depth(self, depth_sensor_value, surface_sensor_value):
-        """
-        Calculate depth using both sensor values and compensating for atmospheric pressure.
-        
-        Args:
-            depth_sensor_value: ADC reading from the depth sensor
-            surface_sensor_value: Current ADC reading from the surface sensor
-        
-        Returns:
-            float: Calculated depth in meters
-        """
+    def set_sensor_value(self, sensor, value):
         try:
-            if self.reference_surface_pressure is None:
-                raise ValueError("Surface pressure not calibrated")
-            
-            # Calculate pressure difference due to atmospheric changes
-            pressure_correction = surface_sensor_value - self.reference_surface_pressure
-            
-            # Compensate depth sensor reading for atmospheric pressure change
-            compensated_depth_reading = depth_sensor_value - pressure_correction
-            
-            # Get depth using converted raw value
-            depth = self.convert_raw(1, compensated_depth_reading)  # Assuming sensor_num=1 for depth sensor
-            
-            return max(0.0, depth)  # Ensure non-negative depth
-                
+            self.sensor_values[sensor] = self.convert_raw(sensor, value)
+        
         except Exception as e:
-            print(f"Error calculating depth: {str(e)}")
-            return None
+            print(f"Error converting raw pressure sensor value: {str(e)}")
 
+    def get_depth(self):
+        if self.sensor_values["bottom"] is None or self.sensor_values["surface"] is None:
+            return None
+        return self.sensor_values["bottom"] - self.sensor_values["surface"]
+        
 # Class to handle shared memory for depth values, used to send values from receiver to mantaPos
 class DepthSharedMemory:
     SHM_NAME = "mantaPos_depth"

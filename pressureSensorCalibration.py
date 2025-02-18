@@ -1,10 +1,9 @@
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.pipeline import make_pipeline
-from sklearn.linear_model import (
-    LinearRegression, Ridge, Lasso, ElasticNet, TheilSenRegressor, RANSACRegressor
-)
+from sklearn.linear_model import LinearRegression
+'''from sklearn.pipeline import make_pipeline
+from sklearn.linear_model import Ridge, Lasso, ElasticNet, TheilSenRegressor, RANSACRegressor
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -13,21 +12,22 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 import xgboost as xgb
-from scipy.interpolate import UnivariateSpline, interp1d
-from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import PolynomialFeatures
+from scipy.interpolate import UnivariateSpline
+import tensorflow as tf'''
+from scipy.interpolate import interp1d
+from sklearn.metrics import r2_score, mean_squared_error
 import pickle
 import warnings
 warnings.filterwarnings('ignore')
 import matplotlib.pyplot as plt
 import os
 import json
-import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
 from scipy import optimize
 
 # Configuration
-DATA_FILE = 'recordings/depth 3 4 calib - 02-14@15-40.json'
+DATA_FILE = 'recordings/depth 1 2 calib - 02-13@16-33.json'
 sensor1_name = 'adc_value0'
 sensor2_name = 'adc_value1'
 
@@ -188,7 +188,14 @@ class PiecewiseLinearAlternate:
         self.px = None
         self.py = None
         self.allowEdits = allowEdits
- 
+
+    # Updated __reduce__ method for proper unpickling
+    def __reduce__(self):
+        # Explicitly import the class from its module
+        module = __import__("pressureSensorCalibration")
+        cls = getattr(module, "PiecewiseLinearAlternate")
+        return (cls, (self.max_segments, self.allowEdits), self.__dict__)
+        
     def segments_fit(self, X, Y, count):
         xmin = X.min()
         xmax = X.max()
@@ -248,6 +255,8 @@ class PiecewiseLinearAlternate:
     def predict(self, X):
         return np.interp(X, self.px, self.py)
 
+#PiecewiseLinearAlternate.__module__ = "pressureSensorCalibration"
+
 # Piecewise linear regression model
 class PiecewiseLinear:
     def __init__(self, min_width=25, max_width=100):
@@ -255,6 +264,10 @@ class PiecewiseLinear:
         self.max_width = max_width
         self.segments = []      # Each segment: (start, end, slope, intercept)
         self.boundaries = []    # List of segment boundaries
+
+    # Add this method to enable proper pickling across scripts.
+    def __reduce__(self):
+        return (PiecewiseLinear, (self.max_segments, self.allowEdits), self.__dict__)
 
     def fit(self, X, y):
         X = np.array(X).ravel()
@@ -304,6 +317,8 @@ class PiecewiseLinear:
     def predict(self, X):
         X = np.array(X).ravel()
         return np.array([self._predict_at(x) for x in X])
+    
+#PiecewiseLinear.__module__ = "pressureSensorCalibration"
 
 def create_models():
     models = {
@@ -328,10 +343,11 @@ def create_models():
         #'Spline3': lambda x, y: UnivariateSpline(x, y, k=2),
         #'KerasNN': create_nn_model(),
         'PiecewiseLinear': PiecewiseLinear(20, 200),
-        'PiecewiseLinearAlternate': PiecewiseLinearAlternate(max_segments=100)#200
+        'PiecewiseLinearAlternate': PiecewiseLinearAlternate(100, True)#200
     }
     return models
 
+'''
 def create_nn_model():
     # Create the ML based neural network model
     model = tf.keras.Sequential([
@@ -343,7 +359,8 @@ def create_nn_model():
     model.compile(loss='mse', optimizer='adam')
     model.summary()
     return model
-
+'''
+    
 def evaluate_models(X_train, X_test, y_train, y_test, models):
     """Evaluate all models and return the best one."""
     results = {}
@@ -567,6 +584,28 @@ def visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_
     plt.show()
 
 
+'''
+# fixing pickle error
+if __name__ == "__main__":
+    for i in range(1, 5):
+        sensor_file = f'calibrations/pressure_calibrations/pressure{i}_calibration.pkl'
+        # Unpack pickled data
+        with open(sensor_file, 'rb') as f:
+            sensor_data = pickle.load(f)
+        print(sensor_data)
+
+        # Save self.px and self.py to a temporary text file in JSON format
+        temp_file = f'piecewise_params{i}.json'
+        params = {
+            "px": sensor_data['model'].px.tolist() if hasattr(sensor_data['model'].px, "tolist") else sensor_data['model'].px,
+            "py": sensor_data['model'].py.tolist() if hasattr(sensor_data['model'].py, "tolist") else sensor_data['model'].py
+        }
+        with open(temp_file, "w") as f:
+            json.dump(params, f, indent=4)
+        print(f"Parameters saved to {temp_file}. You may edit the file if you wish.")
+        input("Press Enter to continue and load parameters...")
+'''
+
 if __name__ == "__main__":
     try:
         # Unpack filtered data and removed points for both sensors.
@@ -612,11 +651,9 @@ if __name__ == "__main__":
         print(f"R² Score: {results2[best_model_name2]['r2']:.6f}")
         print(f"RMSE: {results2[best_model_name2]['rmse']:.4f}")
         
-        
         # Visualize the top 3 models for both sensors side-by-side
         #visualize_two_models(X1_train, X1_test, y1_train, y1_test, results1, fitted_models1,
         #                      X2_train, X2_test, y2_train, y2_test, results2, fitted_models2)
-        
         
         # Visualize the top 3 models for sensor 1
         print("\nVisualizing top 3 models for Sensor 1 (adc_value0)...")
@@ -633,7 +670,6 @@ if __name__ == "__main__":
             removed_green=(green_depth2, green_sensor2),
             removed_yellow=(yellow_depth2, yellow_sensor2)
         )
-        
         
     except Exception as e:
         print(f"Error in calibration process: {str(e)}")

@@ -23,7 +23,7 @@ if os.name == 'nt':
     ES_SYSTEM_REQUIRED = 0x00000001
     ES_DISPLAY_REQUIRED = 0x00000002
     ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
-    print("Windows execution state set to keep screen active.")
+    print("Windows execution state set to keep screen active.\n")
 
 # UDP socket parameters
 UDP_IP = ''             # Listen on all available network interfaces
@@ -186,14 +186,14 @@ def create_unit_lines(data_dict, unit_number):
         
         for i in range(0+2*unit_number//3, 2+2*unit_number//3):                    
             adc_value = int(press['adc_value' + str(i % 2)])
-            depth = pressure_system.convert_raw(i, adc_value)
-            if depth is None:
-                lines.append(f" {pressure_sensors[i]}: Err(Calib) ({adc_value})")
+            if unit_number == 0:
+                depth = press['depth' + str(i)]
+                if depth is None:
+                    lines.append(f" {pressure_sensors[i]}: {adc_value} - Err(Calc)")
+                else:
+                    lines.append(f" {pressure_sensors[i]}: {adc_value} - {depth: .5f}m")
             else:
-                lines.append(f" {pressure_sensors[i]}: {depth: .5f}m ({adc_value})")
-        
-        #lines.append(f" Pressure ADC 0:   {press['adc_value0']}")
-        #lines.append(f" Pressure ADC 1:   {press['adc_value1']}")
+                lines.append(f" {pressure_sensors[i]}: {adc_value}")
         lines.append("")
     elif unit_number != 4:
         for i in range(5): lines.append("")
@@ -572,14 +572,14 @@ cv2.resizeWindow("Sensor Data", IMG_WIDTH, IMG_HEIGHT)
 cv2.setMouseCallback("Sensor Data", mouse_callback)
 
 # Start pressure sensor data translation system
-pressure_system = manta.PressureSensorSystem()
+pressure_system = [manta.PressureSensorSystem(), manta.PressureSensorSystem()]
 for i in range(0,4):
     pressure_calib = pressure_calib_folder + pressure_sensors[i] + "_calibration.pkl"
-    ret = pressure_system.load_calibration(i, pressure_calib)
+    ret = pressure_system[i // 2].load_calibration("surface" if i % 2 else "bottom", pressure_calib)
     if not ret:
         print(f"Error loading calibration for sensor {pressure_sensors[i]}")
     else:
-        print(f"Loaded calibration for sensor {pressure_sensors[i]}")
+        print(f"Loaded calibration for sensor {pressure_sensors[i]} as {'surface' if i % 2 else 'bottom'}{i//2}")
 
 # Initialize shared memory for depth values (as creator)
 depth_shared = manta.DepthSharedMemory(create=True)
@@ -619,9 +619,19 @@ try:
                     
                     # Check if unit number is valid
                     if 0 <= unit_num < len(data_dicts):
-                        data_dict["mpu_unit"] = unit_num
-                        data_dicts[unit_num] = data_dict
                         last_received_times[unit_num] = datetime.now().timestamp()
+                        data_dict["mpu_unit"] = unit_num
+
+                        if unit_num in [0, 3]:
+                            sensor_name = "bottom" if unit_num == 0 else "surface"
+                            for i in range(2):
+                                pressure_system[i].set_sensor_value(sensor_name, data_dict.get("pressure", {}).get("adc_value" + str(i), 0))
+
+                                # Add depth fields to bottom sensor data_dict, one for each system
+                                if unit_num == 0:
+                                    data_dict["pressure"]["depth"+str(i)] = pressure_system[i].get_depth()
+
+                        data_dicts[unit_num] = data_dict
                         
                         # If recording and this unit is being recorded, append data directly to buffer
                         if recording and (unit_num in recording_units):

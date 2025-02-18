@@ -9,7 +9,6 @@ import genMarker
 from datetime import datetime
 import socket
 import json
-import threading
 
 # Initialize parameters
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
