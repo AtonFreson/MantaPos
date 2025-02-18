@@ -45,6 +45,9 @@ units_selected = [False] * len(unit_names)
 # list of all data dicts, one for each unit
 data_dicts = [{} for _ in range(len(unit_names))]
 last_received_times = [0] * len(unit_names)
+update_frequencies = [None] * len(unit_names)
+FREQ_HISTORY_LENGTH = 10
+frequency_history = [[] for _ in range(len(unit_names))]
 time_diff_history = [[] for _ in range(len(unit_names))]
 
 # Data folders
@@ -77,6 +80,13 @@ last_recording_save_time = None
 recording_units = []
 recording_data_buffer = []
 recording_interval = 10.0  # append every 10 seconds
+
+# Average depth values for the pressure system
+depth_history = []
+depth_offset_history = []
+avg_depth = [None, None]
+AVG_DEPTH_LENGTH = 30  # Number of depth values to average per list
+
 
 # Positions for data displays (left side)
 DATA_START_X = 10
@@ -137,6 +147,14 @@ IMG_WIDTH = CHECKBOX_START_X + 370
 IMG_HEIGHT = 990
 
 
+def update_depth_average(value, history_list):
+    if value is not None:
+        history_list.append(value)
+        if len(history_list) > AVG_DEPTH_LENGTH:
+            history_list.pop(0)
+        return sum(history_list) / len(history_list)
+    return None
+
 def update_time_diff(timestamp, time_diff, current_unit):
     global ref_unit_time, ref_unit
     if ref_unit_time == None:
@@ -160,13 +178,15 @@ def create_unit_lines(data_dict, unit_number):
         lines.append("Encoder Data:")
         lines.append(f"-- Time: {int(enc['timestamp'])/1000:.3f} --")
         time_diff = update_time_diff(enc['timestamp'], time_diff, unit_number)
-        lines.append(f" Rev:     {enc['revolutions']: .5f}")
-        lines.append(f" RPM:    {enc['rpm']: .5f} rpm")
+        try:                                                                                            # KEEP UNTIL FIXED
+            lines.append(f" Counts:  {enc['counts']}")
+        except KeyError:
+            lines.append(f" Counts:  Err(Not Given)")
         lines.append(f" Speed:  {enc['speed']: .5f} m/s")
         lines.append(f" Dist:    {enc['distance']: .5f} m")
         lines.append("")
     elif unit_number != 4:
-        for i in range(7): lines.append("")
+        for i in range(6): lines.append("")
     
     if "temperature" in data_dict:
         temp = data_dict["temperature"]
@@ -186,17 +206,20 @@ def create_unit_lines(data_dict, unit_number):
         
         for i in range(0+2*unit_number//3, 2+2*unit_number//3):                    
             adc_value = int(press['adc_value' + str(i % 2)])
-            if unit_number == 0:
-                depth = press['depth' + str(i)]
-                if depth is None:
-                    lines.append(f" {pressure_sensors[i]}: {adc_value} - Err(Calc)")
-                else:
-                    lines.append(f" {pressure_sensors[i]}: {adc_value} - {depth: .5f}m")
+            depth = press['depth' + ('_offset' if unit_number != 0 else '') + str(i % 2)]
+            if depth is None:
+                lines.append(f" {pressure_sensors[i]}: {adc_value} (Err(Calc))")
             else:
-                lines.append(f" {pressure_sensors[i]}: {adc_value}")
+                lines.append(f" {pressure_sensors[i]}: {adc_value} ({depth: .5f}m)")
+        
+        running_avg = avg_depth[unit_number//3]
+        if running_avg is not None:
+            lines.append(f" Average ({AVG_DEPTH_LENGTH} vals): {avg_depth[unit_number//3]: .5f}m")
+        else:
+            lines.append(f" Average ({AVG_DEPTH_LENGTH} vals): Err(Calc)")
         lines.append("")
     elif unit_number != 4:
-        for i in range(5): lines.append("")
+        for i in range(6): lines.append("")
 
     if "imu" in data_dict:
         imu = data_dict["imu"]
@@ -228,8 +251,10 @@ def create_unit_lines(data_dict, unit_number):
     if "ptp" in data_dict:
         press = data_dict["ptp"]
         lines.append("PTP Clock Info:")
-        lines.append(f" Syncing: {press['syncing']}")
-        lines.append(f" Status:  {press['status']}")
+        if press['syncing'] == "IN PROGRESS...":
+            lines.append(f" Status:  {press['status']} (SYNCING)")
+        else:
+            lines.append(f" Status:  {press['status']}")
         lines.append(f" {press['details']}")
         
         time_since_sync = int(press['time_since_sync'])
@@ -245,6 +270,11 @@ def create_unit_lines(data_dict, unit_number):
             lines.append(f" RTC Diff:   {press['difference']}ms")
         else:
             lines.append(" RTC Diff:   Err(Out of Range)")
+
+        if update_frequencies[unit_number] is not None:
+            lines.append(f" Avg Update Freq: {update_frequencies[unit_number]:.2f} Hz")
+        else:
+            lines.append(" Avg Update Freq: Err(N/A)")
     elif unit_number != 4:
         for i in range(6): lines.append("")
 
@@ -580,6 +610,7 @@ for i in range(0,4):
         print(f"Error loading calibration for sensor {pressure_sensors[i]}")
     else:
         print(f"Loaded calibration for sensor {pressure_sensors[i]} as {'surface' if i % 2 else 'bottom'}{i//2}")
+print("")
 
 # Initialize shared memory for depth values (as creator)
 depth_shared = manta.DepthSharedMemory(create=True)
@@ -616,10 +647,21 @@ try:
                     print("Warning: 'mpu_unit' key missing in data")
                 else:
                     unit_num = int(unit_num_str)
-                    
+
                     # Check if unit number is valid
                     if 0 <= unit_num < len(data_dicts):
-                        last_received_times[unit_num] = datetime.now().timestamp()
+                        if recording and (unit_num in recording_units): receive_time = datetime.now().isoformat()
+
+                        current_time = datetime.now().timestamp()
+                        if last_received_times[unit_num] is not None:
+                            inst_freq = 1.0 / (current_time - last_received_times[unit_num])
+                            frequency_history[unit_num].append(inst_freq)
+                            if len(frequency_history[unit_num]) > FREQ_HISTORY_LENGTH:
+                                frequency_history[unit_num].pop(0)
+                            update_frequencies[unit_num] = sum(frequency_history[unit_num]) / len(frequency_history[unit_num])
+                        else:
+                            update_frequencies[unit_num] = None
+                        last_received_times[unit_num] = current_time
                         data_dict["mpu_unit"] = unit_num
 
                         if unit_num in [0, 3]:
@@ -627,16 +669,31 @@ try:
                             for i in range(2):
                                 pressure_system[i].set_sensor_value(sensor_name, data_dict.get("pressure", {}).get("adc_value" + str(i), 0))
 
-                                # Add depth fields to bottom sensor data_dict, one for each system
+                                # Add depth fields to pressure sensor data
                                 if unit_num == 0:
-                                    data_dict["pressure"]["depth"+str(i)] = pressure_system[i].get_depth()
+                                    depth = pressure_system[i].get_depth()
+                                    data_dict["pressure"]["depth"+str(i)] = depth
+                                    avg_depth[0] = update_depth_average(depth, depth_history)
+                                else:
+                                    offset = pressure_system[i].sensor_values[sensor_name]
+                                    data_dict["pressure"]["depth_offset"+str(i)] = offset
+                                    avg_depth[1] = update_depth_average(offset, depth_offset_history)
+
+                        # Reorder keys for unit 0 so that 'encoder' and 'imu' are last, for output file readability
+                        if unit_num == 0:
+                            new_data_dict = {k: v for k, v in data_dict.items() if k not in ('encoder', 'imu')}
+                            if 'encoder' in data_dict:
+                                new_data_dict['encoder'] = data_dict['encoder']
+                            if 'imu' in data_dict:
+                                new_data_dict['imu'] = data_dict['imu']
+                            data_dict = new_data_dict
 
                         data_dicts[unit_num] = data_dict
                         
                         # If recording and this unit is being recorded, append data directly to buffer
                         if recording and (unit_num in recording_units):
                             # Add a timestamp field for local recording time
-                            data_dict = {"mpu_unit": unit_num, "recv_time": datetime.now().isoformat(), **data_dict}
+                            data_dict = {"mpu_unit": unit_num, "recv_time": receive_time, **data_dict}
                             recording_data_buffer.append(data_dict)
                     else:
                         print(f"Warning: Invalid unit number received: {unit_num}")

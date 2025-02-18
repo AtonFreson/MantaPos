@@ -810,7 +810,8 @@ class PressureSensorSystem:
         if callable(self.sensor_models[sensor]):
             depth = model(sensor_value)
         else: #  Assume a sklearn-like model
-            depth = model.predict([[sensor_value]])[0]
+            depth = float(model.predict([[sensor_value]]).item())
+            #depth = model.predict([[sensor_value]])[0]
         return depth
     
     def set_sensor_value(self, sensor, value):

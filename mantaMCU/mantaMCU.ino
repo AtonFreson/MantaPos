@@ -111,7 +111,7 @@ float R_transform[3][3] = { {1,0,0}, {0,1,0}, {0,0,1} };
 
 #if HAS_ENCODER
 long currentCount;
-float revolutions = 0, rpm = 0, speed = 0, distance = 0;
+float speed = 0, distance = 0;
 #endif
 
 #if HAS_PRESSURE
@@ -408,19 +408,13 @@ void dataPrint(ESP1588_Tracker& m) {
     interrupts();
 
     // Calculate distance
-    revolutions = (float)currentCount / COUNTS_PER_REV;
     distance = (float)currentCount * DISTANCE_PER_COUNT;
 
     // Calculate speed
     unsigned long timeDelta = encoderTimestamp - lastMeasurementTime;
     float countsPerSec = (float)(currentCount - lastEncoderCount) * (1000.0 / timeDelta);
-    rpm = (countsPerSec * 60.0) / COUNTS_PER_REV;
     speed = countsPerSec * DISTANCE_PER_COUNT;
 
-    // Validate rpm and speed
-    if (!isfinite(rpm)) {
-        rpm = 0.0;
-    }
     if (!isfinite(speed)) {
         speed = 0.0;
     }
@@ -474,8 +468,7 @@ void dataPrint(ESP1588_Tracker& m) {
 #if HAS_ENCODER
         // Encoder data printing
         Serial.println("Encoder Data (T:" + String(encoderTimestamp) + "):");
-        Serial.print("Rev: "); Serial.print(revolutions, 5); Serial.print("\t");
-        Serial.print("RPM: "); Serial.print(rpm, 5); Serial.print("\t");
+        Serial.print("Counts: "); Serial.print(currentCount); Serial.print("\t");
         Serial.print("Speed (m/s): "); Serial.print(speed, 5); Serial.print("\t");
         Serial.print("Distance (m): "); Serial.print(distance, 5); Serial.println();
         Serial.println();
@@ -516,7 +509,7 @@ void dataPrint(ESP1588_Tracker& m) {
     snprintf(jsonBuffer, sizeof(jsonBuffer),
         "{\"mpu_unit\": \"%d\", "
 #if HAS_ENCODER
-        "\"encoder\": {\"timestamp\": %llu, \"revolutions\": %.5f, \"rpm\": %.5f, \"speed\": %.5f, \"distance\": %.5f}, "
+        "\"encoder\": {\"timestamp\": %llu, \"counts\": %lls, \"speed\": %.5f, \"distance\": %.5f}, "
 #endif
 #if HAS_IMU
         "\"imu\": {\"timestamp\": %llu, \"acceleration\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}, \"gyroscope\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}}, "
@@ -534,7 +527,7 @@ void dataPrint(ESP1588_Tracker& m) {
 #endif
         MPU_UNIT,
 #if HAS_ENCODER
-        encoderTimestamp, revolutions, rpm, speed, distance,
+        encoderTimestamp, currentCount, speed, distance,
 #endif
 #if HAS_IMU
         imuTimestamp, accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2],
