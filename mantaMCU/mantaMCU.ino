@@ -507,7 +507,7 @@ void dataPrint(ESP1588_Tracker& m) {
     // JSON construction
     char jsonBuffer[1024];
     snprintf(jsonBuffer, sizeof(jsonBuffer),
-        "{\"mpu_unit\": \"%d\", "
+        "{\"mpu_unit\": \"%d\", \"packet_number\": %d, "
 #if HAS_ENCODER
         "\"encoder\": {\"timestamp\": %llu, \"counts\": %lls, \"speed\": %.5f, \"distance\": %.5f}, "
 #endif
@@ -525,7 +525,7 @@ void dataPrint(ESP1588_Tracker& m) {
 #else
         "}",
 #endif
-        MPU_UNIT,
+        MPU_UNIT, lastPrint++,
 #if HAS_ENCODER
         encoderTimestamp, currentCount, speed, distance,
 #endif
