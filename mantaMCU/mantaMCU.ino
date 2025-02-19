@@ -12,13 +12,13 @@
 #include <math.h>
 
 // The ESP32 unit number. Following 0:"X-axis Encoder", 1:"Z-axis Encoder - Main", 2:"Z-axis Encoder - Second", 3:"Surface Pressure Sensor" 
-#define MPU_UNIT 0
+#define MPU_UNIT 2
 
 // Features available on this unit
 #define HAS_CLOCK       1
 #define HAS_ENCODER     1
-#define HAS_IMU         1
-#define HAS_PRESSURE    1
+#define HAS_IMU         0
+#define HAS_PRESSURE    0
 
 // Pin definitions for SCA50 differential signals
 #define ENCODER_PIN_A_POS 14  // A
@@ -140,10 +140,13 @@ WiFiUDP UdpGeneral;
 IPAddress ptpMulticastIP(224, 0, 1, 129);
 IPAddress masterIP(169, 254, 178, 87);
 
-int lastPrint = 0;
+unsigned long lastPrint = 0;
+
+#if HAS_CLOCK
 bool sync_clock = false;
 uint32_t storedSyncTime = 0; // Store the last sync time read from EEPROM
 int64_t storedOffset = 0;    // Variable to store the offset read from EEPROM
+#endif
 
 // ADC configuration for pressure sensor
 #if HAS_PRESSURE
@@ -509,7 +512,7 @@ void dataPrint(ESP1588_Tracker& m) {
     snprintf(jsonBuffer, sizeof(jsonBuffer),
         "{\"mpu_unit\": \"%d\", \"packet_number\": %d, "
 #if HAS_ENCODER
-        "\"encoder\": {\"timestamp\": %llu, \"counts\": %lls, \"speed\": %.5f, \"distance\": %.5f}, "
+        "\"encoder\": {\"timestamp\": %llu, \"counts\": %ld, \"speed\": %.5f, \"distance\": %.5f}, "
 #endif
 #if HAS_IMU
         "\"imu\": {\"timestamp\": %llu, \"acceleration\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}, \"gyroscope\": {\"x\": %.5f, \"y\": %.5f, \"z\": %.5f}}, "
@@ -735,21 +738,28 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(RTC_ISR_PIN), rtcSecondInterrupt, FALLING);
 #endif
 
+#if HAS_IMU || HAS_CLOCK
     EEPROM.begin(512); // Initialize EEPROM with size 512 bytes
+#endif
+
+#if HAS_CLOCK
     EEPROM.get(0, storedSyncTime);   // Read the last stored sync time from EEPROM
     EEPROM.get(4, storedOffset);     // Read the offset from EEPROM
     SerialW.printf("Stored sync time: %u\n", storedSyncTime);
     SerialW.printf("Stored offset: %lld\n", storedOffset);
 
+    esp1588.SetDomain(0);	// The domain of your PTP clock, 0 - 31
+    esp1588.Begin();
+#endif
+
+#if HAS_IMU
     // Load rotation matrix if valid
     uint32_t flag;
     EEPROM.get(12, flag);
     if (flag == 0xA5A5A5A5) {
         EEPROM.get(16, R_transform);
     }
-
-    esp1588.SetDomain(0);	// The domain of your PTP clock, 0 - 31
-    esp1588.Begin();
+#endif
 
 #if HAS_PRESSURE
     // Initialize ADC
@@ -775,15 +785,19 @@ void loop() {
         resetOccurred = false; // Clear the reset occurred flag
     }
 
+#if HAS_CLOCK
     esp1588.Loop();	//this needs to be called OFTEN, at least several times per second but more is better. forget controlling program flow with delay() in your code.
     ESP1588_Tracker & m = esp1588.GetMaster();
+#endif
 
     if (millis() - lastPrintTime >= printInterval) {
         dataPrint(m);
         lastPrintTime = millis();
 
+#if HAS_CLOCK
         SerialW.printf("PTP status: %s   Master %s   Delay %s\n", esp1588.GetLockStatus()?"LOCKED":"UNLOCKED", m.Healthy()?"OK":"no", esp1588.GetShortStatusString());
         PrintPTPInfo(m);
+#endif
         SerialW.println("\n");
     }
     

@@ -49,6 +49,8 @@ update_frequencies = [None] * len(unit_names)
 FREQ_HISTORY_LENGTH = 10
 frequency_history = [[] for _ in range(len(unit_names))]
 time_diff_history = [[] for _ in range(len(unit_names))]
+dropped_packets = [0] * len(unit_names)
+last_packet = [None] * len(unit_names)
 
 # Data folders
 recording_folder = "recordings"
@@ -178,10 +180,7 @@ def create_unit_lines(data_dict, unit_number):
         lines.append("Encoder Data:")
         lines.append(f"-- Time: {int(enc['timestamp'])/1000:.3f} --")
         time_diff = update_time_diff(enc['timestamp'], time_diff, unit_number)
-        try:                                                                                            # KEEP UNTIL FIXED
-            lines.append(f" Counts:  {enc['counts']}")
-        except KeyError:
-            lines.append(f" Counts:  Err(Not Given)")
+        lines.append(f" Counts:  {enc['counts']}")
         lines.append(f" Speed:  {enc['speed']: .5f} m/s")
         lines.append(f" Dist:    {enc['distance']: .5f} m")
         lines.append("")
@@ -272,9 +271,9 @@ def create_unit_lines(data_dict, unit_number):
             lines.append(" RTC Diff:   Err(Out of Range)")
 
         if update_frequencies[unit_number] is not None:
-            lines.append(f" Avg Update Freq: {update_frequencies[unit_number]:.2f} Hz")
+            lines.append(f" Pckt Freq: {update_frequencies[unit_number]:.2f}Hz ({dropped_packets[unit_number]} lost)")
         else:
-            lines.append(" Avg Update Freq: Err(N/A)")
+            lines.append(" Pkt Freq: Err(N/A)")
     elif unit_number != 4:
         for i in range(6): lines.append("")
 
@@ -511,6 +510,9 @@ def mouse_callback(event, x, y, flags, param):
         # Check if click is inside "Reboot Selected" button
         if BUTTON_X1 <= x <= BUTTON_X2 and BUTTON_Y1 <= y <= BUTTON_Y2:
             command_dict = {"units": selected_units, "command": "reboot"}
+            for unit_number in selected_units:
+                dropped_packets[unit_number] = 0
+                last_packet[unit_number] = None
         # Check if click is inside "Zero Selected" button
         elif BUTTON_X1 <= x <= BUTTON_X2 and ZERO_BUTTON_Y1 <= y <= ZERO_BUTTON_Y2:
             if wait_for_zero_position_selected:
@@ -627,7 +629,7 @@ try:
                 input_box_text = input_box_text[:-1]
             elif key != 255 and key not in [27, 9, 10, 13, 8]:
                 input_box_text += chr(key)
-
+        
         new_datas = [None, None]
         with data_lock:
             if received_data:
@@ -636,6 +638,7 @@ try:
             if received_data_local:
                 addr, new_datas[1] = received_data_local
                 received_data_local = None
+        
         
         for new_data in new_datas:
             if new_data is None:
@@ -650,7 +653,8 @@ try:
 
                     # Check if unit number is valid
                     if 0 <= unit_num < len(data_dicts):
-                        if recording and (unit_num in recording_units): receive_time = datetime.now().isoformat()
+                        if recording and (unit_num in recording_units): 
+                            receive_time = datetime.now().isoformat()
 
                         current_time = datetime.now().timestamp()
                         if last_received_times[unit_num] is not None:
@@ -663,6 +667,11 @@ try:
                             update_frequencies[unit_num] = None
                         last_received_times[unit_num] = current_time
                         data_dict["mpu_unit"] = unit_num
+
+                        current_packet = data_dict["packet_number"]
+                        if last_packet[unit_num] is not None:
+                            dropped_packets[unit_num] += current_packet - last_packet[unit_num] - 1
+                        last_packet[unit_num] = current_packet
 
                         if unit_num in [0, 3]:
                             sensor_name = "bottom" if unit_num == 0 else "surface"
@@ -700,12 +709,14 @@ try:
             except Exception as e:
                 print(f"\nException occurred during data processing: {e}")
                 print(f"Received data:\n{new_data}")
-
+        
         # Clear data for units that haven't sent data in the last few seconds
         for unit_num in range(len(unit_names)):
             if datetime.now().timestamp() - last_received_times[unit_num] > 5.0:
                 data_dicts[unit_num] = {}
                 time_diff_history[unit_num] = []
+                dropped_packets[unit_num] = 0
+                last_packet[unit_num] = None
 
         # Every 10 seconds, if recording, flush buffer to file
         if recording and (datetime.now() - last_recording_save_time).total_seconds() >= recording_interval:
@@ -733,7 +744,9 @@ try:
         depth_shared.write_depths(depth_main, depth_sec)
 
         # Create and show image
+        #loop_start = datetime.now()
         img = create_data_image(data_dicts)
+        #print(f"Main loop iteration took {((datetime.now() - loop_start).total_seconds())*1000:.3f} milliseconds")
         cv2.imshow("Sensor Data", img)
         
         # Check if button was pressed and reset color after 0.5 second
@@ -743,7 +756,7 @@ try:
         # Check for window close (ESC)
         if key == 27:
             break
-
+        
 except KeyboardInterrupt:
     print("User exiting...")
 
