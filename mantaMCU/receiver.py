@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import traceback
 import ctypes
+import time
 
 # Add parent directory to the path to import mantaPosLib
 from inspect import getsourcefile
@@ -617,6 +618,25 @@ print("")
 # Initialize shared memory for depth values (as creator)
 depth_shared = manta.DepthSharedMemory(create=True)
 
+# Create a global variable to hold the latest data_dict and a lock for thread-safety
+latest_data_dict = None
+data_image = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
+def process_data_image():
+    global latest_data_dict, data_image
+    while True:
+        # get a snapshot of latest_data_dict if available.
+        with data_lock:
+            data = latest_data_dict
+            latest_data_dict = None  # reset after getting the latest data
+        if data is not None:
+            data_image = create_data_image(data)  # assuming create_data_image accepts one argument
+        # sleep briefly so as to not hog the CPU
+        time.sleep(0.001)
+
+# Start the background image processing thread
+threading.Thread(target=process_data_image, daemon=True).start()
+
+
 # Main loop
 try:
     while True:
@@ -745,9 +765,9 @@ try:
 
         # Create and show image
         #loop_start = datetime.now()
-        img = create_data_image(data_dicts)
+        #img = process_data_image(latest_data_dict)
         #print(f"Main loop iteration took {((datetime.now() - loop_start).total_seconds())*1000:.3f} milliseconds")
-        cv2.imshow("Sensor Data", img)
+        cv2.imshow("Sensor Data", data_image)
         
         # Check if button was pressed and reset color after 0.5 second
         if button_pressed and (datetime.now() - button_press_time).total_seconds() > 0.5:
@@ -756,6 +776,10 @@ try:
         # Check for window close (ESC)
         if key == 27:
             break
+
+        # Update the latest_data_dict for the background thread.
+        with data_lock:
+            latest_data_dict = data_dicts.copy()
         
 except KeyboardInterrupt:
     print("User exiting...")
