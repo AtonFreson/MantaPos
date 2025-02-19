@@ -75,6 +75,9 @@ def create_and_save_ChArUco_board(sq_len_meters, sq_pixels, margin_pixels, mrkr_
 
     img = aruco.CharucoBoard.generateImage(board, img_size, marginSize=margin_pixels)
 
+    # save img to A3 paper size pdf
+    cv2.imwrite('ChArUco_Marker.png', img)
+
     # Add circular dots to the marker image
     #img = add_circular_dots(img, dot_offset, 5, 8)
     #img = add_circular_dots(img, dot_offset, 5, 20)

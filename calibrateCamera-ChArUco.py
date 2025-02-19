@@ -9,13 +9,13 @@ import genMarker
 # Set the selected camera: 4K, gopro or axis.
 CAMERA_TYPE = "4K"
 CAMERA_INPUT = 2 # Select OBS Virtual Camera
-CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.12:554/" # Overwrites CAMERA_INPUT if 4K selected
+CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
 
-use_existing_images = True # Use existing images for calibration, found in snapshot_dir
+use_existing_images = False # Use existing images for calibration, found in snapshot_dir
 delay_time = 1 # 1s delay between capture
 
 squares_vertically = 7
-squares_horizontally = 12
+squares_horizontally = 10
 square_pixels = 140 # Pixel size of the chessboard squares
 grid_edge = 30 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
@@ -168,7 +168,7 @@ else:
 
         # Check if the user wants to quit
         key = cv2.waitKey(1)
-        if key == ord('q'):
+        if key == 27:
             break
 
     # Release the camera and close windows
