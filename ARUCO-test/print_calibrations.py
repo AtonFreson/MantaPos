@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-calibration_dir = './camera_calibrations'
+calibration_dir = './calibrations/camera_calibrations'
 
 # List all files in the calibration directory
 all_files = os.listdir(calibration_dir)

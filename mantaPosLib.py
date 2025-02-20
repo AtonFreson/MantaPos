@@ -853,7 +853,7 @@ class DepthSharedMemory:
                 # Try to attach to existing shared memory
                 self.shm = shared_memory.SharedMemory(name=self.SHM_NAME)
         except Exception as e:
-            print(f"Shared memory error: {e}")
+            #print(f"Shared memory error: {e}")
             self.shm = None
 
     def write_depths(self, depth_main, depth_sec):

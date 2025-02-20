@@ -11,7 +11,7 @@ CAMERA_TYPE = "4K"
 CAMERA_INPUT = 2 # Select OBS Virtual Camera
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
 
-use_existing_images = False # Use existing images for calibration, found in snapshot_dir
+use_existing_images = True # Use existing images for calibration, found in snapshot_dir
 delay_time = 1 # 1s delay between capture
 
 squares_vertically = 7
@@ -69,14 +69,14 @@ if not os.path.exists(calibration_dir):
 all_charuco_ids = []
 all_charuco_corners = []
 
-def load_images_and_detect_ChArUco(directory_path):
+def load_images_and_detect_ChArUco(directory_path, check_every_nth=3):
     all_charuco_ids = []
     all_charuco_corners = []
     image_files = [f for f in os.listdir(directory_path) if f.endswith(('.png', '.jpg', '.jpeg'))]
     total_images = len(image_files)
     for idx, filename in enumerate(image_files):
 
-        if idx%3 != 0:
+        if idx%check_every_nth != 0:
             continue
 
         image_path = os.path.join(directory_path, filename)
@@ -106,12 +106,13 @@ def load_images_and_detect_ChArUco(directory_path):
 
         # Print progress
         print(f"Processed image {idx + 1} of {total_images}. Detected {len(charucoIds)} ChArUco corners.")
+    print(f"Loaded {len(all_charuco_corners)} images for calibration.")
     return all_charuco_corners, all_charuco_ids, gray_frame
 
 
 if use_existing_images:
     print("Using existing images for calibration.")
-    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir)
+    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir, 6)
 else:
     # Start capturing camera frames
     next_snapshot_time = time.time() + 0.5  # First snapshot in 500ms
