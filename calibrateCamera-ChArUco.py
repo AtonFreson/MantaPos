@@ -19,7 +19,7 @@ squares_horizontally = 10
 square_pixels = 140 # Pixel size of the chessboard squares
 grid_edge = 30 # Pixel margin outside the ChArUco grid
 marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7 
-square_length = 0.2975/6 * square_pixels/200 # Real world length of square in meters
+square_length = 0.3689/squares_horizontally #0.2975/6 * square_pixels/200 # Real world length of square in meters
 
 # Generate and display the marker grid
 board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
@@ -69,11 +69,12 @@ if not os.path.exists(calibration_dir):
 all_charuco_ids = []
 all_charuco_corners = []
 
-def load_images_and_detect_ChArUco(directory_path, check_every_nth=3):
+def load_images_and_detect_ChArUco(directory_path, total_snapshots_used=30, min_corners=6):
     all_charuco_ids = []
     all_charuco_corners = []
     image_files = [f for f in os.listdir(directory_path) if f.endswith(('.png', '.jpg', '.jpeg'))]
     total_images = len(image_files)
+    check_every_nth = total_images // total_snapshots_used
     for idx, filename in enumerate(image_files):
 
         if idx%check_every_nth != 0:
@@ -100,7 +101,7 @@ def load_images_and_detect_ChArUco(directory_path, check_every_nth=3):
             num_corners, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, gray_frame, board)
             
             # If at least 6 corners are detected, save the frame
-            if charucoIds is not None and len(charucoCorners) >= 6:
+            if charucoIds is not None and len(charucoCorners) >= min_corners:
                 all_charuco_corners.append(charucoCorners)
                 all_charuco_ids.append(charucoIds)
 
@@ -112,7 +113,7 @@ def load_images_and_detect_ChArUco(directory_path, check_every_nth=3):
 
 if use_existing_images:
     print("Using existing images for calibration.")
-    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir, 6)
+    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir, 200, 20)
 else:
     # Start capturing camera frames
     next_snapshot_time = time.time() + 0.5  # First snapshot in 500ms

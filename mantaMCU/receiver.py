@@ -183,7 +183,12 @@ def create_unit_lines(data_dict, unit_number):
         time_diff = update_time_diff(enc['timestamp'], time_diff, unit_number)
         lines.append(f" Counts:  {enc['counts']}")
         lines.append(f" Speed:  {enc['speed']: .5f} m/s")
-        lines.append(f" Dist:    {enc['distance']: .5f} m")
+        if unit_number == 1:
+            lines.append(f" Dist:    {enc['distance']+0.15114-0.15: .5f} m")
+        elif unit_number == 2:
+            lines.append(f" Dist:    {enc['distance']+0.21671-0.15: .5f} m")
+        else:
+            lines.append(f" Dist:    {enc['distance']: .5f} m")
         lines.append("")
     elif unit_number != 4:
         for i in range(6): lines.append("")

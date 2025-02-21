@@ -12,7 +12,7 @@ import json
 
 # Initialize parameters
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
-camera_calibration_file = 'camera_calibration_4K_6s.npz'
+camera_calibration_file = 'camera_calibration_4K.npz'
 
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 
@@ -102,6 +102,9 @@ board_rot = [0,0,0]  # Euler rotation of the marker in degrees, origin is normal
 # Initialize shared memory (as consumer)
 depth_shared = manta.DepthSharedMemory(create=False)
 
+# Test frame
+test_frame = cv2.imread("./snapshots/snapshot_1029.png")
+
 # Main loop
 try:
     while True:
@@ -116,6 +119,7 @@ try:
         #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
         #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges
         
+        frame = test_frame
         # Convert to grayscale
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
