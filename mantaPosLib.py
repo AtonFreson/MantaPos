@@ -632,6 +632,59 @@ def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera
     
     return position, position_std, rotation, rotation_std
 
+# Function to calculate the camera position and orientation in the global coordinate system
+def calculate_camera_position(rvec, tvec, marker_pos_rot):
+    # Marker position and rotation in global coordinates
+    marker_pos, marker_rot = marker_pos_rot
+    x, y, z = marker_pos
+    roll_deg, pitch_deg, yaw_deg = marker_rot
+
+    # Convert rotation vector to rotation matrix
+    R_marker_camera, _ = cv2.Rodrigues(rvec)
+    t_marker_camera = tvec.reshape((3, 1))
+
+    # Invert the transformation to get pose of camera in marker coordinate system
+    R_camera_marker = R_marker_camera.T
+    t_camera_marker = -R_marker_camera.T @ t_marker_camera
+
+    # Compute rotation matrix from global to marker coordinate system
+    roll_rad, pitch_rad, yaw_rad = np.deg2rad([roll_deg, pitch_deg, yaw_deg])
+    R_marker_global = R.from_euler('xyz', [roll_rad, pitch_rad, yaw_rad]).as_matrix()
+    t_marker_global = np.array([x, y, z]).reshape((3, 1))
+
+    # Compute camera pose in global coordinates
+    R_camera_global = R_marker_global @ R_camera_marker
+    t_camera_global = R_marker_global @ t_camera_marker + t_marker_global
+
+    # Convert rotation matrix to Euler angles (in degrees)
+    euler_angles_global = R.from_matrix(R_camera_global).as_euler('xyz', degrees=True)
+
+    return t_camera_global.flatten(), euler_angles_global
+
+# Function to display the position and orientation of the camera in the global coordinate system
+def display_camera_position(frame, position, rotation, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, 
+                            text_color=(0, 255, 0), thickness=1, alpha=0.5, rect_padding=(10, 10, 600, 75)):
+    
+    # Create a position text with fixed-width formatting to prevent text shifting
+    position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={-position[1]: >+6.3f}m, Z={-position[2]: >+6.3f}m")
+    rotation_text = (f"Rot: R={rotation[0]: >+6.3f}', P={rotation[1]: >+6.3f}', Y={rotation[2]: >+6.3f}'")
+
+    # Unpack rectangle bounds
+    x, y, w, h = rect_padding
+
+    # Create a copy of the frame for overlay
+    overlay = frame.copy()
+
+    # Draw the rectangle
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
+
+    # Put text on the overlay
+    cv2.putText(overlay, position_text, (x+20, y + int(h / 4.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_text, (x+20, y + int(h / 1.5)), font, font_scale, text_color, thickness)
+    
+    # Apply the overlay
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
 # Class to read frames from an RTSP camera stream, with minimal buffering for real-time applications. Wrapper around OpenCV's VideoCapture class.
 # Set timestamp=True to read the timestamp along with the frame.
 class RealtimeCapture:
@@ -861,10 +914,8 @@ class DepthSharedMemory:
         if self.shm is None and not self.create:
             # Try to reconnect if we're the consumer
             self.connect()
-        
         if self.shm is None:
             return False
-            
         try:
             packed = struct.pack('dd', depth_main if depth_main is not None else 99.999999,
                                      depth_sec  if depth_sec  is not None else 99.999999)
@@ -880,10 +931,8 @@ class DepthSharedMemory:
         if self.shm is None and not self.create:
             # Try to reconnect if we're the consumer
             self.connect()
-            
         if self.shm is None:
             return None, None
-            
         try:
             data = self.shm.buf[:self.SIZE]
             depth_main, depth_sec = struct.unpack('dd', data)
@@ -908,6 +957,91 @@ class DepthSharedMemory:
                 self.shm.unlink()
             except Exception as e:
                 print(f"Error unlinking shared memory: {e}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+# Class to handle shared memory for camera position/rotation data, to send json strings.
+class PositionSharedMemory:
+    SHM_NAME = "mantaPos_position"
+    SIZE = 512  # bytes
+
+    def __init__(self, create=False):
+        self.create = create
+        self.connect()
+
+    def connect(self):
+        try:
+            if self.create:
+                try:
+                    existing = shared_memory.SharedMemory(name=self.SHM_NAME)
+                    existing.close()
+                    existing.unlink()
+                except FileNotFoundError:
+                    pass
+                self.shm = shared_memory.SharedMemory(name=self.SHM_NAME, create=True, size=self.SIZE)
+                # Initialize shared memory: flag=0 and zeroed rest
+                self.shm.buf[0] = 0
+                self.shm.buf[1:self.SIZE] = bytes(self.SIZE - 1)
+            else:
+                self.shm = shared_memory.SharedMemory(name=self.SHM_NAME)
+        except Exception as e:
+            self.shm = None
+
+    def write_position(self, json_string):
+        if self.shm is None and not self.create:
+            self.connect()
+        if self.shm is None:
+            return False
+        try:
+            encoded = json_string.encode('utf-8')
+            if len(encoded) > self.SIZE - 1:
+                encoded = encoded[:self.SIZE - 1]
+            # Clear existing data and set new packet flag
+            self.shm.buf[0] = 1  # mark new packet as unread
+            self.shm.buf[1:self.SIZE] = bytes(self.SIZE - 1)
+            self.shm.buf[1:1+len(encoded)] = encoded
+            return True
+        except Exception as e:
+            print(f"Error writing to position shared memory: {e}")
+            self.shm = None
+            return False
+
+    def get_position(self):
+        if self.shm is None and not self.create:
+            self.connect()
+        if self.shm is None:
+            return None
+        try:
+            # Check if a new packet exists
+            if self.shm.buf[0] != 1:
+                return None
+            # Read data from buffer (starting at byte 1)
+            data = self.shm.buf[1:self.SIZE].tobytes().decode('utf-8').rstrip('\x00')
+            # Reset flag after reading
+            self.shm.buf[0] = 0
+            return data
+        except Exception as e:
+            print(f"Error reading from position shared memory: {e}")
+            self.shm = None
+            return None
+
+    def close(self):
+        if self.shm is not None:
+            try:
+                self.shm.close()
+            except Exception as e:
+                print(f"Error closing position shared memory: {e}")
+
+    def unlink(self):
+        if self.shm is not None:
+            try:
+                self.shm.unlink()
+            except Exception as e:
+                print(f"Error unlinking position shared memory: {e}")
 
     def __enter__(self):
         return self

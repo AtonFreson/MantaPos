@@ -468,13 +468,24 @@ def udp_listener():
     global received_data
     while not stop_threads:
         try:
-            data, addr = sock.recvfrom(4096)
+            data, _ = sock.recvfrom(4096)
             with data_lock:
-                received_data = (addr, data.decode())
+                received_data = data.decode()
         except socket.timeout:
             continue
         except Exception as e:
             print(f"Error in UDP listener: {e}")
+            break
+
+def position_listener():
+    global received_data_local
+    while not stop_threads:
+        try:
+            data = position_shared.get_position()
+            with data_lock:
+                received_data_local = data
+        except Exception as e:
+            print(f"Error in position listener: {e}")
             break
 
 def mouse_callback(event, x, y, flags, param):
@@ -602,6 +613,10 @@ def mouse_callback(event, x, y, flags, param):
 udp_thread = threading.Thread(target=udp_listener)
 udp_thread.start()
 
+# Start position memory listener thread
+position_thread = threading.Thread(target=position_listener)
+position_thread.start()
+
 # Create OpenCV window
 cv2.namedWindow("Sensor Data", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Sensor Data", IMG_WIDTH, IMG_HEIGHT)
@@ -620,8 +635,9 @@ for i in range(0,4):
         print(f"Loaded calibration for sensor {pressure_sensors[i]} as {'surface' if i % 2 else 'bottom'}{i//2}")
 print("")
 
-# Initialize shared memory for depth values (as creator)
+# Initialize shared memory for depth values (as creator) and position values (as reader)
 depth_shared = manta.DepthSharedMemory(create=True)
+position_shared = manta.PositionSharedMemory(create=False)
 
 # Create a global variable to hold the latest data_dict and a lock for thread-safety
 latest_data_dict = None
@@ -658,12 +674,11 @@ try:
         new_datas = [None, None]
         with data_lock:
             if received_data:
-                addr, new_datas[0] = received_data
+                new_datas[0] = received_data
                 received_data = None
             if received_data_local:
-                addr, new_datas[1] = received_data_local
+                new_datas[1] = received_data_local
                 received_data_local = None
-        
         
         for new_data in new_datas:
             if new_data is None:
@@ -803,12 +818,16 @@ finally:
         except Exception as e:
             print("Error writing to file:", e)
 
+    print("Stopping threads...")
+    stop_threads = True
+    udp_thread.join()
+    position_thread.join()
+
     print("Cleaning up shared memory...")
+    position_shared.close()
     depth_shared.close()
     depth_shared.unlink()  # Only the creator should unlink
 
     print("Exiting...")
-    stop_threads = True
-    udp_thread.join()
     cv2.destroyAllWindows()
     sys.exit()

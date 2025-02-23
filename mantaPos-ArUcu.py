@@ -6,7 +6,6 @@ import mantaPosLib as manta
 import genMarker
 
 
-
 # ArUco marker settings
 aruco_dict = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
 detector_params = cv2.aruco.DetectorParameters()
