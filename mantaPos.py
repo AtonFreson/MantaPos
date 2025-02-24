@@ -11,7 +11,7 @@ import json
 
 # Initialize parameters
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
-camera_calibration_file = 'camera_calibration_4K.npz'
+camera_calibration_file = 'camera_calibration_4K-36_20.npz'
 
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 
@@ -92,7 +92,8 @@ depth_shared = manta.DepthSharedMemory(create=False)
 position_shared = manta.PositionSharedMemory(create=False)
 
 # Test frame
-test_frame = cv2.imread("ChArUco_Marker_test.png")
+#test_frame = cv2.imread("ChArUco_Marker_test.png")
+test_frame = cv2.imread("./snapshots/snapshot_0793.png")
 
 # Main loop
 try:

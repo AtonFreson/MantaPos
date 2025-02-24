@@ -113,7 +113,7 @@ def load_images_and_detect_ChArUco(directory_path, total_snapshots_used=30, min_
 
 if use_existing_images:
     print("Using existing images for calibration.")
-    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir, 200, 20)
+    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir, 1206, 20)
 else:
     # Start capturing camera frames
     next_snapshot_time = time.time() + 0.5  # First snapshot in 500ms
