@@ -40,6 +40,10 @@ sock.settimeout(0.5)
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
+# Initialize shared memory for depth values (as creator) and position values (as reader)
+depth_shared = manta.DepthSharedMemory(create=True)
+position_shared = manta.PositionSharedMemory(create=True)
+
 # List of unit names (can be edited)
 unit_names = ["X-axis Encoder", "Z-axis Encoder - Main", "Z-axis Encoder - Second", "Surface Pressure Sensor", "mantaPos Positioning"]
 units_selected = [False] * len(unit_names)
@@ -149,6 +153,9 @@ INFO_BOX_Y2 = INFO_BOX_Y1 + 70 + 27*len(unit_names)
 IMG_WIDTH = CHECKBOX_START_X + 370
 IMG_HEIGHT = 990
 
+# Initialize shared data lists for UDP and position data
+received_data_list = []
+received_data_local_list = []
 
 def update_depth_average(value, history_list):
     if value is not None:
@@ -175,6 +182,26 @@ def create_unit_lines(data_dict, unit_number):
     
     # Add unit name at the top
     lines.append(unit_names[unit_number].center(30))
+    
+    if "camera" in data_dict:
+        cam = data_dict["camera"]
+        lines.append("Camera Data:")
+        lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
+        position = cam["position"]
+        #position_std = cam["position_std"]
+        rotation = cam["rotation"]
+        #rotation_std = cam["rotation_std"]
+        
+        lines.append(" Position:")
+        lines.append(f"  X={position[0]: >+6.3f}m")# ±{position_std[0]: >6.3f}")
+        lines.append(f"  Y={position[1]: >+6.3f}m")# ±{position_std[1]: >6.3f}")
+        lines.append(f"  Z={position[2]: >+6.3f}m")# ±{position_std[2]: >6.3f}")
+        lines.append(" Rotation:")
+        lines.append(f"  Roll={rotation[0]: >+6.3f}'")# ±{rotation_std[0]: >6.3f}")
+        lines.append(f"  Pitch={rotation[1]: >+6.3f}'")# ±{rotation_std[1]: >6.3f}")
+        lines.append(f"  Yaw={rotation[2]: >+6.3f}'")# ±{rotation_std[2]: >6.3f}")
+        lines.append("")
 
     if "encoder" in data_dict:
         enc = data_dict["encoder"]
@@ -190,7 +217,7 @@ def create_unit_lines(data_dict, unit_number):
         else:
             lines.append(f" Dist:    {enc['distance']: .5f} m")
         lines.append("")
-    elif unit_number != 4:
+    else:
         for i in range(6): lines.append("")
     
     if "temperature" in data_dict:
@@ -200,7 +227,7 @@ def create_unit_lines(data_dict, unit_number):
         time_diff = update_time_diff(temp['timestamp'], time_diff, unit_number)
         lines.append(f" Temperature:   {temp['value']: .2f} C")
         lines.append("")
-    elif unit_number != 4:
+    else:
         for i in range(4): lines.append("")
     
     if "pressure" in data_dict:
@@ -223,7 +250,7 @@ def create_unit_lines(data_dict, unit_number):
         else:
             lines.append(f" Average ({AVG_DEPTH_LENGTH} vals): Err(Calc)")
         lines.append("")
-    elif unit_number != 4:
+    else:
         for i in range(6): lines.append("")
 
     if "imu" in data_dict:
@@ -250,7 +277,7 @@ def create_unit_lines(data_dict, unit_number):
             lines.append(f" Gyro Z:     {gyro['z']: .5f} rad/s")
             
         lines.append("")
-    elif unit_number != 4:
+    else:
         for i in range(9): lines.append("")
     
     if "ptp" in data_dict:
@@ -275,34 +302,21 @@ def create_unit_lines(data_dict, unit_number):
             lines.append(f" RTC Diff:   {press['difference']}ms")
         else:
             lines.append(" RTC Diff:   Err(Out of Range)")
+    else:
+        for i in range(4): lines.append("")
 
+    if data_dict != {}:
+        # Fit data for unit 4
+        if unit_number == 4:
+            lines = lines[:-11]
+
+        if "ptp" not in data_dict:
+            lines.append("Clock Info:")
         if update_frequencies[unit_number] is not None:
             lines.append(f" Pckt Freq: {update_frequencies[unit_number]:.2f}Hz ({dropped_packets[unit_number]} lost)")
         else:
-            lines.append(" Pkt Freq: Err(N/A)")
-    elif unit_number != 4:
-        for i in range(6): lines.append("")
+            lines.append(" Pckt Freq: Err(N/A)")
 
-    if "camera" in data_dict:
-        cam = data_dict["camera"]
-        lines.append("Camera Data:")
-        lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
-        time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
-        position = cam["position"]
-        position_std = cam["position_std"]
-        rotation = cam["rotation"]
-        rotation_std = cam["rotation_std"]
-        
-        lines.append(" Position:")
-        lines.append(f"  X={position[0]: >+6.3f}m ±{position_std[0]: >6.3f}")
-        lines.append(f"  Y={position[1]: >+6.3f}m ±{position_std[1]: >6.3f}")
-        lines.append(f"  Z={position[2]: >+6.3f}m ±{position_std[2]: >6.3f}")
-        lines.append(" Rotation:")
-        lines.append(f"  Roll={rotation[0]: >+6.3f}° ±{rotation_std[0]: >6.3f}")
-        lines.append(f"  Pitch={rotation[1]: >+6.3f}° ±{rotation_std[1]: >6.3f}")
-        lines.append(f"  Yaw={rotation[2]: >+6.3f}° ±{rotation_std[2]: >6.3f}")
-
-    if data_dict != {}:
         if time_diff is not None:
             # Store time_diff in the history for this unit
             time_diff_history[unit_number].append(time_diff)
@@ -320,9 +334,9 @@ def create_unit_lines(data_dict, unit_number):
             if abs(time_diff) > print_range:
                 lines.append(f" Unit {ref_unit} Diff: Err(Out of Range)")
             elif avg_time_diff is not None:
-                lines.append(f" Unit {ref_unit} Diff: {time_diff}ms ({avg_time_diff:.0f}ms)")
+                lines.append(f" Unit {ref_unit} Diff: {time_diff:>4}ms ({avg_time_diff:>4.0f}ms)")
             else:
-                lines.append(f" Unit {ref_unit} Diff: {time_diff}ms")
+                lines.append(f" Unit {ref_unit} Diff: {time_diff:>4}ms")
         else:
             lines.append(f" Unit {ref_unit} Diff: N/A")
     
@@ -339,6 +353,9 @@ def create_data_image(data_dicts):
 
     # Create a black image
     img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
+
+    # Fill right side background with light gray
+    cv2.rectangle(img, (DATA_START_X + DATA_SPACING_X * len(unit_names) + SPACER_WIDTH // 2 - 10, 0), (IMG_WIDTH, IMG_HEIGHT), (50, 50, 50), -1)
     
     # Left side data displays from units
     ref_unit_time = None
@@ -358,6 +375,7 @@ def create_data_image(data_dicts):
     
 
     ### Right side unit list and user input options ###
+
     # Display "Desktop Time" above the unit boxes
     cv2.putText(img, f"Desktop Time: {datetime.now().timestamp():.3f}", (CHECKBOX_START_X, TIME_START_X),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -465,12 +483,18 @@ def create_data_image(data_dicts):
     return img
 
 def udp_listener():
-    global received_data
+    global received_data_list
     while not stop_threads:
         try:
             data, _ = sock.recvfrom(4096)
-            with data_lock:
-                received_data = data.decode()
+            data = data.decode()
+            recv_time = datetime.now().timestamp()
+            if data is not None:
+                with data_lock:
+                    received_data_list.append((data, recv_time))
+                    if len(received_data_list) > 10:
+                        print("Warning: UDP data backlog exceeded 10 items, dropping oldest.")
+                        received_data_list.pop(0)
         except socket.timeout:
             continue
         except Exception as e:
@@ -478,12 +502,18 @@ def udp_listener():
             break
 
 def position_listener():
-    global received_data_local
+    global received_data_local_list
     while not stop_threads:
         try:
             data = position_shared.get_position()
-            with data_lock:
-                received_data_local = data
+            if data is not None:
+                recv_time = datetime.now().timestamp()
+                with data_lock:
+                    received_data_local_list.append((data, recv_time))
+                    if len(received_data_local_list) > 10:
+                        print("Warning: Position data backlog exceeded 10 items, dropping oldest.")
+                        received_data_local_list.pop(0)
+            time.sleep(0.01) # Short sleep to prevent high CPU usage
         except Exception as e:
             print(f"Error in position listener: {e}")
             break
@@ -620,6 +650,7 @@ position_thread.start()
 # Create OpenCV window
 cv2.namedWindow("Sensor Data", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Sensor Data", IMG_WIDTH, IMG_HEIGHT)
+cv2.startWindowThread()  # Add this so window events run in a dedicated thread
 
 # Set mouse callback function
 cv2.setMouseCallback("Sensor Data", mouse_callback)
@@ -634,10 +665,6 @@ for i in range(0,4):
     else:
         print(f"Loaded calibration for sensor {pressure_sensors[i]} as {'surface' if i % 2 else 'bottom'}{i//2}")
 print("")
-
-# Initialize shared memory for depth values (as creator) and position values (as reader)
-depth_shared = manta.DepthSharedMemory(create=True)
-position_shared = manta.PositionSharedMemory(create=False)
 
 # Create a global variable to hold the latest data_dict and a lock for thread-safety
 latest_data_dict = None
@@ -671,20 +698,17 @@ try:
             elif key != 255 and key not in [27, 9, 10, 13, 8]:
                 input_box_text += chr(key)
         
-        new_datas = [None, None]
+        new_datas = []
         with data_lock:
-            if received_data:
-                new_datas[0] = received_data
-                received_data = None
-            if received_data_local:
-                new_datas[1] = received_data_local
-                received_data_local = None
+            while received_data_list:
+                new_datas.append(received_data_list.pop(0))
+            while received_data_local_list:
+                new_datas.append(received_data_local_list.pop(0))
         
-        for new_data in new_datas:
-            if new_data is None:
-                continue                
+        for new_item in new_datas:              
             try:
-                data_dict = json.loads(new_data)
+                data_str, recv_time = new_item
+                data_dict = json.loads(data_str)
                 unit_num_str = data_dict.get("mpu_unit")
                 if unit_num_str is None:
                     print("Warning: 'mpu_unit' key missing in data")
@@ -694,9 +718,9 @@ try:
                     # Check if unit number is valid
                     if 0 <= unit_num < len(data_dicts):
                         if recording and (unit_num in recording_units): 
-                            receive_time = datetime.now().isoformat()
+                            rec_time_str = datetime.fromtimestamp(recv_time).isoformat()
 
-                        current_time = datetime.now().timestamp()
+                        current_time = recv_time
                         if last_received_times[unit_num] is not None:
                             inst_freq = 1.0 / (current_time - last_received_times[unit_num])
                             frequency_history[unit_num].append(inst_freq)
@@ -742,13 +766,13 @@ try:
                         # If recording and this unit is being recorded, append data directly to buffer
                         if recording and (unit_num in recording_units):
                             # Add a timestamp field for local recording time
-                            data_dict = {"mpu_unit": unit_num, "recv_time": receive_time, **data_dict}
+                            data_dict = {"mpu_unit": unit_num, "recv_time": rec_time_str, **data_dict}
                             recording_data_buffer.append(data_dict)
                     else:
                         print(f"Warning: Invalid unit number received: {unit_num}")
             except Exception as e:
                 print(f"\nException occurred during data processing: {e}")
-                print(f"Received data:\n{new_data}")
+                print(f"Received data:\n{data_str}")
         
         # Clear data for units that haven't sent data in the last few seconds
         for unit_num in range(len(unit_names)):
@@ -757,6 +781,7 @@ try:
                 time_diff_history[unit_num] = []
                 dropped_packets[unit_num] = 0
                 last_packet[unit_num] = None
+                update_frequencies[unit_num] = None
 
         # Every 10 seconds, if recording, flush buffer to file
         if recording and (datetime.now() - last_recording_save_time).total_seconds() >= recording_interval:
@@ -827,6 +852,7 @@ finally:
     position_shared.close()
     depth_shared.close()
     depth_shared.unlink()  # Only the creator should unlink
+    position_shared.unlink() # Only the creator should unlink
 
     print("Exiting...")
     cv2.destroyAllWindows()

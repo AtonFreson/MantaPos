@@ -27,7 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from scipy import optimize
 
 # Configuration
-DATA_FILE = 'recordings/depth 1 2 calib - 02-13@16-33.json'
+DATA_FILE = 'recordings/depth 3 4 calib - 02-14@15-40.json'
 sensor1_name = 'adc_value0'
 sensor2_name = 'adc_value1'
 

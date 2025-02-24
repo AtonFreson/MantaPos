@@ -679,8 +679,8 @@ def display_camera_position(frame, position, rotation, font=cv2.FONT_HERSHEY_SIM
     cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
 
     # Put text on the overlay
-    cv2.putText(overlay, position_text, (x+20, y + int(h / 4.5)), font, font_scale, text_color, thickness)
-    cv2.putText(overlay, rotation_text, (x+20, y + int(h / 1.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, position_text, (x+20, y + int(h / 2.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_text, (x+20, y + int(h / 1.15)), font, font_scale, text_color, thickness)
     
     # Apply the overlay
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
@@ -972,6 +972,7 @@ class PositionSharedMemory:
     def __init__(self, create=False):
         self.create = create
         self.connect()
+        self.new_content = bytearray(self.SIZE)
 
     def connect(self):
         try:
@@ -999,11 +1000,10 @@ class PositionSharedMemory:
         try:
             encoded = json_string.encode('utf-8')
             if len(encoded) > self.SIZE - 1:
-                encoded = encoded[:self.SIZE - 1]
-            # Clear existing data and set new packet flag
-            self.shm.buf[0] = 1  # mark new packet as unread
-            self.shm.buf[1:self.SIZE] = bytes(self.SIZE - 1)
-            self.shm.buf[1:1+len(encoded)] = encoded
+                raise ValueError(f"Data too large for shared memory ({len(encoded)} bytes). Please increase SIZE in the PositionSharedMemory class.")
+            self.new_content[0] = 1  # mark new packet as unread
+            self.new_content[1:1+len(encoded)] = encoded
+            self.shm.buf[:self.SIZE] = self.new_content
             return True
         except Exception as e:
             print(f"Error writing to position shared memory: {e}")

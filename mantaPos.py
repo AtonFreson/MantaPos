@@ -72,6 +72,7 @@ detector = cv2.aruco.ArucoDetector(dictionary, params)
 # Initialize camera
 cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
+frame_number = 0
 
 # Set camera resolution
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
@@ -86,12 +87,12 @@ calibration_data = np.load(os.path.join(calibration_dir, camera_calibration_file
 camera_matrix = calibration_data['camera_matrix']
 dist_coeffs = calibration_data['dist_coeffs']
 
-# Initialize shared memory for depth (consumer) and for camera position/rotation (producer)
+# Initialize shared memory for depth (consumer) and for camera position/rotation (consumer)
 depth_shared = manta.DepthSharedMemory(create=False)
-position_shared = manta.PositionSharedMemory(create=True)
+position_shared = manta.PositionSharedMemory(create=False)
 
 # Test frame
-test_frame = cv2.imread("./snapshots/snapshot_1029.png")
+test_frame = cv2.imread("ChArUco_Marker_test.png")
 
 # Main loop
 try:
@@ -107,7 +108,8 @@ try:
         #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
         #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges
         
-        frame = test_frame
+        frame = test_frame.copy()
+        #cv2.imwrite('ArUco_Marker_test.png', frame)
 
         # Convert to grayscale
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -213,22 +215,23 @@ try:
                 position, rotation = manta.calculate_camera_position(tvec_list[0], rvec_list[0], markers_pos_rot[0])
                 manta.display_camera_position(frame, position, rotation, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,200))
 
-            # Save data to shared memory, to be received by receiver.py
             json_data = {
                 "mpu_unit": MPU_UNIT,
+                "packet_number": frame_number,
                 "camera": {
                     "timestamp": int(datetime.now().timestamp() * 1000),
                     "position": position.tolist(),
                     "rotation": rotation.tolist()
                 }
             }
+            frame_number += 1
             position_shared.write_position(json.dumps(json_data))
 
         # Get the depth values from receiver.py
         depth_main, depth_sec = depth_shared.get_depth()
 
         # Display the winch depth balancing reference
-        manta.display_balance_bar(frame, depth_main, depth_sec, font_scale=8, thickness=20, bar_height=500)
+        manta.display_balance_bar(frame, depth_main, depth_sec, font_scale=3, thickness=8, bar_height=200)
 
         # Display the camera preview with overlays
         manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame) # Ensure this function exists
@@ -244,8 +247,9 @@ except KeyboardInterrupt:
 except Exception as e:
     print(f"Error: {e}")
 finally:
-    print("Cleaning up...")
+    print("Cleaning up shared memory...")
     depth_shared.close()
     position_shared.close()
-    position_shared.unlink() # Only the creator should unlink
+
+    print("Exiting...")
     cv2.destroyAllWindows()
