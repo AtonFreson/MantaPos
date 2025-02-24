@@ -11,7 +11,7 @@ import json
 
 # Initialize parameters
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
-camera_calibration_file = 'camera_calibration_4K.npz'
+camera_calibration_file = 'camera_calibration_4K-38_20-picked.npz'
 
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 
@@ -92,7 +92,9 @@ depth_shared = manta.DepthSharedMemory(create=False)
 position_shared = manta.PositionSharedMemory(create=False)
 
 # Test frame
-test_frame = cv2.imread("ChArUco_Marker_test.png")
+#test_frame = cv2.imread("ChArUco_Marker_test.png")
+test_frame = cv2.imread("./snapshots/snapshot_0793.png")
+snapnr = 1
 
 # Main loop
 try:
@@ -107,7 +109,7 @@ try:
         
         #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
         #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges
-        
+        test_frame = cv2.imread(f"./cam_captures/snapshot_{snapnr:04d}.png")
         frame = test_frame.copy()
         #cv2.imwrite('ArUco_Marker_test.png', frame)
 
@@ -237,10 +239,24 @@ try:
         manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame) # Ensure this function exists
         cv2.imshow("Camera Preview with Position", frame)
 
-        # Check if the user wants to quit
+        # Check if the user wants to quit(esc) or take a snapshot(spacebar)
         key = cv2.waitKey(1)
         if key == 27:
             break
+        elif key == 32:
+            # Check what the highest number in the snapshot folder is, and enumerate from there
+            snapshot_number = 0
+            for file in os.listdir("./cam_captures"):
+                if file.endswith(".png"):
+                    number = int(file.split("_")[1].split(".")[0])
+                    print(number)
+                    if number > snapshot_number:
+                        snapshot_number = number
+            snapshot_number = snapshot_number+1
+            cv2.imwrite(f"./cam_captures/snapshot_{snapshot_number:04d}.png", frame)
+            print(f"Snapshot saved in cam_captures as snapshot_{snapshot_number:04d}.png")
+        elif key == ord('c'):
+            snapnr = snapnr + 1
 
 except KeyboardInterrupt:
     print("User interrupted...")
