@@ -194,13 +194,13 @@ def create_unit_lines(data_dict, unit_number):
         #rotation_std = cam["rotation_std"]
         
         lines.append(" Position:")
-        lines.append(f"  X={position[0]: >+6.3f}m")# ±{position_std[0]: >6.3f}")
-        lines.append(f"  Y={position[1]: >+6.3f}m")# ±{position_std[1]: >6.3f}")
-        lines.append(f"  Z={position[2]: >+6.3f}m")# ±{position_std[2]: >6.3f}")
+        lines.append(f"  X=     {position[0]: >+6.3f}m")# ±{position_std[0]: >6.3f}")
+        lines.append(f"  Y=     {position[1]: >+6.3f}m")# ±{position_std[1]: >6.3f}")
+        lines.append(f"  Z=     {position[2]: >+6.3f}m")# ±{position_std[2]: >6.3f}")
         lines.append(" Rotation:")
-        lines.append(f"  Roll={rotation[0]: >+6.3f}'")# ±{rotation_std[0]: >6.3f}")
-        lines.append(f"  Pitch={rotation[1]: >+6.3f}'")# ±{rotation_std[1]: >6.3f}")
-        lines.append(f"  Yaw={rotation[2]: >+6.3f}'")# ±{rotation_std[2]: >6.3f}")
+        lines.append(f"  X=     {rotation[0]: >+6.3f} deg")# ±{rotation_std[0]: >6.3f}")
+        lines.append(f"  Y=     {rotation[1]: >+6.3f} deg")# ±{rotation_std[1]: >6.3f}")
+        lines.append(f"  Z=     {rotation[2]: >+6.3f} deg")# ±{rotation_std[2]: >6.3f}")
         lines.append("")
 
     if "encoder" in data_dict:
@@ -666,38 +666,10 @@ for i in range(0,4):
         print(f"Loaded calibration for sensor {pressure_sensors[i]} as {'surface' if i % 2 else 'bottom'}{i//2}")
 print("")
 
-# Create a global variable to hold the latest data_dict and a lock for thread-safety
-latest_data_dict = None
-data_image = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
-def process_data_image():
-    global latest_data_dict, data_image
-    while True:
-        # get a snapshot of latest_data_dict if available.
-        with data_lock:
-            data = latest_data_dict
-            latest_data_dict = None  # reset after getting the latest data
-        if data is not None:
-            data_image = create_data_image(data)  # assuming create_data_image accepts one argument
-        # sleep briefly so as to not hog the CPU
-        time.sleep(0.001)
 
-# Start the background image processing thread
-threading.Thread(target=process_data_image, daemon=True).start()
-
-
-# Main loop
-try:
-    while True:
-        # Handle keyboard input for filename if focused
-        key = cv2.waitKey(1) & 0xFF
-        if input_box_focused:
-            if key == 13:  # ENTER key
-                input_box_focused = False
-            elif key == 8:  # BACKSPACE
-                input_box_text = input_box_text[:-1]
-            elif key != 255 and key not in [27, 9, 10, 13, 8]:
-                input_box_text += chr(key)
-        
+def process_incoming_data():
+    global latest_data_dict, last_recording_save_time, recording, recording_data_buffer
+    while not stop_threads:
         new_datas = []
         with data_lock:
             while received_data_list:
@@ -714,12 +686,11 @@ try:
                     print("Warning: 'mpu_unit' key missing in data")
                 else:
                     unit_num = int(unit_num_str)
-
-                    # Check if unit number is valid
+    
                     if 0 <= unit_num < len(data_dicts):
                         if recording and (unit_num in recording_units): 
                             rec_time_str = datetime.fromtimestamp(recv_time).isoformat()
-
+    
                         current_time = recv_time
                         if last_received_times[unit_num] is not None:
                             inst_freq = 1.0 / (current_time - last_received_times[unit_num])
@@ -731,28 +702,26 @@ try:
                             update_frequencies[unit_num] = None
                         last_received_times[unit_num] = current_time
                         data_dict["mpu_unit"] = unit_num
-
+    
                         current_packet = data_dict["packet_number"]
                         if last_packet[unit_num] is not None:
                             dropped_packets[unit_num] += current_packet - last_packet[unit_num] - 1
                         last_packet[unit_num] = current_packet
-
+    
                         if unit_num in [0, 3]:
                             sensor_name = "bottom" if unit_num == 0 else "surface"
                             for i in range(2):
                                 pressure_system[i].set_sensor_value(sensor_name, data_dict.get("pressure", {}).get("adc_value" + str(i), 0))
-
-                                # Add depth fields to pressure sensor data
+    
                                 if unit_num == 0:
                                     depth = pressure_system[i].get_depth()
-                                    data_dict["pressure"]["depth"+str(i)] = depth
+                                    data_dict["pressure"]["depth" + str(i)] = depth
                                     avg_depth[0] = update_depth_average(depth, depth_history)
                                 else:
                                     offset = pressure_system[i].sensor_values[sensor_name]
-                                    data_dict["pressure"]["depth_offset"+str(i)] = offset
+                                    data_dict["pressure"]["depth_offset" + str(i)] = offset
                                     avg_depth[1] = update_depth_average(offset, depth_offset_history)
-
-                        # Reorder keys for unit 0 so that 'encoder' and 'imu' are last, for output file readability
+    
                         if unit_num == 0:
                             new_data_dict = {k: v for k, v in data_dict.items() if k not in ('encoder', 'imu')}
                             if 'encoder' in data_dict:
@@ -760,12 +729,10 @@ try:
                             if 'imu' in data_dict:
                                 new_data_dict['imu'] = data_dict['imu']
                             data_dict = new_data_dict
-
+    
                         data_dicts[unit_num] = data_dict
                         
-                        # If recording and this unit is being recorded, append data directly to buffer
                         if recording and (unit_num in recording_units):
-                            # Add a timestamp field for local recording time
                             data_dict = {"mpu_unit": unit_num, "recv_time": rec_time_str, **data_dict}
                             recording_data_buffer.append(data_dict)
                     else:
@@ -774,7 +741,6 @@ try:
                 print(f"\nException occurred during data processing: {e}")
                 print(f"Received data:\n{data_str}")
         
-        # Clear data for units that haven't sent data in the last few seconds
         for unit_num in range(len(unit_names)):
             if datetime.now().timestamp() - last_received_times[unit_num] > 5.0:
                 data_dicts[unit_num] = {}
@@ -782,8 +748,7 @@ try:
                 dropped_packets[unit_num] = 0
                 last_packet[unit_num] = None
                 update_frequencies[unit_num] = None
-
-        # Every 10 seconds, if recording, flush buffer to file
+    
         if recording and (datetime.now() - last_recording_save_time).total_seconds() >= recording_interval:
             if recording_data_buffer:
                 try:
@@ -795,25 +760,66 @@ try:
                     print("Error writing to file:", e)
             
             last_recording_save_time = datetime.now()
-
-        # Get depth values from data_dicts if they exist
+    
         depth_main = None
         depth_sec = None
         
-        if data_dicts[1].get("encoder"):  # Unit 1: Main encoder
+        if data_dicts[1].get("encoder"):
             depth_main = data_dicts[1]["encoder"].get("distance")
-        if data_dicts[2].get("encoder"):  # Unit 2: Secondary encoder
+        if data_dicts[2].get("encoder"):
             depth_sec = data_dicts[2]["encoder"].get("distance")
             
-        # Write depth values to shared memory
         depth_shared.write_depths(depth_main, depth_sec)
+    
+        with data_lock:
+            latest_data_dict = data_dicts.copy()
+        
+        time.sleep(0.001)
 
+# Start the data processing thread
+data_processing_thread = threading.Thread(target=process_incoming_data, daemon=True)
+data_processing_thread.start()
+
+# Create a global variable to hold the latest data_dict and a lock for thread-safety
+latest_data_dict = None
+data_image = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
+def process_data_image():
+    global latest_data_dict, data_image
+    while not stop_threads:
+        # get a snapshot of latest_data_dict if available.
+        with data_lock:
+            data = latest_data_dict
+            latest_data_dict = None  # reset after getting the latest data
+        if data is not None:
+            data_image = create_data_image(data)  # assuming create_data_image accepts one argument
+        # sleep briefly so as to not hog the CPU
+        time.sleep(0.001)
+
+# Start the background image processing thread
+process_data_image_thread = threading.Thread(target=process_data_image, daemon=True)
+process_data_image_thread.start()
+
+
+# Main loop
+try:
+    while True:
+        # Handle keyboard input for filename if focused
+        key = cv2.waitKey(1) & 0xFF
+        if input_box_focused:
+            if key == 13:  # ENTER key
+                input_box_focused = False
+            elif key == 8:  # BACKSPACE
+                input_box_text = input_box_text[:-1]
+            elif key != 255 and key not in [27, 9, 10, 13, 8]:
+                input_box_text += chr(key)
+        
+        
         # Create and show image
         #loop_start = datetime.now()
         #img = process_data_image(latest_data_dict)
         #print(f"Main loop iteration took {((datetime.now() - loop_start).total_seconds())*1000:.3f} milliseconds")
         cv2.imshow("Sensor Data", data_image)
-        
+
         # Check if button was pressed and reset color after 0.5 second
         if button_pressed and (datetime.now() - button_press_time).total_seconds() > 0.5:
             button_pressed = False
@@ -822,10 +828,6 @@ try:
         if key == 27:
             break
 
-        # Update the latest_data_dict for the background thread.
-        with data_lock:
-            latest_data_dict = data_dicts.copy()
-        
 except KeyboardInterrupt:
     print("User exiting...")
 
@@ -847,6 +849,8 @@ finally:
     stop_threads = True
     udp_thread.join()
     position_thread.join()
+    data_processing_thread.join()
+    process_data_image_thread.join()
 
     print("Cleaning up shared memory...")
     position_shared.close()
