@@ -109,7 +109,7 @@ try:
         
         #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
         #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges
-        test_frame = cv2.imread(f"./cam_captures/snapshot_{snapnr:04d}.png")
+        test_frame = cv2.imread(f"../cam_captures/snapshot_{snapnr:04d}.png")
         frame = test_frame.copy()
         #cv2.imwrite('ArUco_Marker_test.png', frame)
 
