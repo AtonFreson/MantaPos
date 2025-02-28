@@ -19,14 +19,17 @@ MARKER_TYPE = ["ChArUco", "Single"]  # Select the marker type to use
 # Options are "ChArUco" or "ArUco", and "Single" or "Quad" respectively
 
 # Quad ChArUco positions in meters and order: 36, 37, 38, 39
-QUAD_CHARUCO_POS = [[2.5, 0.0], [0.0, 2.5], [-2.5, 0.0], [0.0, -2.5]]
+QUAD_CHARUCO_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
 
 # Quad ArUco positions in meters and order: b1, b2, b3, b4
-QUAD_ARUCO_POS = [[2.5, 0.0], [0.0, 2.5], [-2.5, 0.0], [0.0, -2.5]]
+QUAD_ARUCO_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
 
 # Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
 visualise_calib_dist = True
 new_camera_matrix = None
+
+# Set to True to enable position zeroing of markers based on camera position.
+enable_encoder_zeroing = False
 
 if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
     # ChArUco board settings
@@ -109,8 +112,8 @@ try:
         
         #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
         #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges
-        test_frame = cv2.imread(f"../cam_captures/snapshot_{snapnr:04d}.png")
-        frame = test_frame.copy()
+        #test_frame = cv2.imread(f"../cam_captures/snapshot_{snapnr:04d}.png")
+        #frame = test_frame.copy()
         #cv2.imwrite('ArUco_Marker_test.png', frame)
 
         # Convert to grayscale
