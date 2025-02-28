@@ -838,6 +838,57 @@ def frame_crop(frame, crop_size=0.7):
 
     return frame
 
+# Function to zero the marker position based on the relative position of the marker from the camera, and the global position of the camera.
+def zero_marker_position(tvec, rvec, z0, z1, frame_pos):
+    
+    adj = 3.8 # Horizontal distance between the depth sensors.
+    frame_pos_offset = 0.3 # Offset from the main depth sensor to the camera.
+    #x = 2.5 # Distance from the camera to the marker in the x direction.
+    
+    frame_pos = frame_pos + frame_pos_offset
+    # Determine y position based on the frame position, where frame_pose makes up the hypotenuse of a right triangle.
+    opp = z0 - z1
+    hyp = np.sqrt((opp**2) + (adj**2))
+    y = frame_pos/hyp * adj - adj/2
+    z = z0 - opp * frame_pos/hyp
+
+    # Camera rotation around x axis based on right triangle. Assume the camera is level otherwise.
+    camera_rot_x = np.arctan(opp/adj)
+
+    x = tvec[0]
+
+    camera_position = np.array([x, y, z])
+    camera_rotation = np.array([camera_rot_x, 0, 0])
+
+    ## Calculate the positon of the marker in the global coordinate system. ##
+    R_marker_camera, _ = cv2.Rodrigues(rvec)
+	# Invert to get camera pose in marker coordinates
+    R_camera_marker = R_marker_camera.T
+    t_camera_marker = -R_camera_marker @ tvec.reshape((3, 1))
+	
+    R_camera_global = R.from_euler('xyz', camera_rotation, degrees=True).as_matrix()
+	
+	# Since camera_global = R_marker_global @ t_camera_marker + marker_global, then:
+    marker_global = camera_position.reshape((3, 1)) - R_camera_global @ t_camera_marker
+	
+	# Also compute marker's global rotation
+    marker_R_global = R_camera_global @ R_marker_camera
+    marker_euler = R.from_matrix(marker_R_global).as_euler('xyz', degrees=True)
+
+    return marker_global.flatten(), marker_euler
+
+# NEW: Function to calculate the marker's global position and rotation
+def calculate_marker_position(rvec, tvec, camera_pos_rot):
+	"""
+	Compute marker global pose given rvec, tvec from solvePnP and known camera global pose.
+	Parameters:
+	    rvec, tvec: Marker-to-camera transformation from solvePnP.
+	    camera_pos_rot: Tuple (camera_position, camera_rotation) where camera_rotation is in degrees.
+	Returns:
+	    marker_position (np.ndarray), marker_rotation (np.ndarray in degrees)
+	"""
+	
+
 class PressureSensorSystem:
     def __init__(self):
         self.sensor_models = {"bottom": None, "surface": None}
@@ -882,7 +933,7 @@ class PressureSensorSystem:
 # Class to handle shared memory for depth values, used to send values from receiver to mantaPos
 class DepthSharedMemory:
     SHM_NAME = "mantaPos_depth"
-    SIZE = 16  # 2 x 8-byte floats
+    SIZE = 24  # 3 x 8-byte floats
     
     def __init__(self, create=False):
         self.create = create
@@ -899,9 +950,9 @@ class DepthSharedMemory:
                     existing.unlink()
                 except FileNotFoundError:
                     pass
-                # Create new shared memory block
+                # Create new shared memory block and initialize with default values
                 self.shm = shared_memory.SharedMemory(name=self.SHM_NAME, create=True, size=self.SIZE)
-                self.shm.buf[:self.SIZE] = struct.pack('dd', 99.999999, 99.999999)
+                self.shm.buf[:self.SIZE] = struct.pack('ddd', 99.999999, 99.999999, 99.999999)
             else:
                 # Try to attach to existing shared memory
                 self.shm = shared_memory.SharedMemory(name=self.SHM_NAME)
@@ -909,16 +960,20 @@ class DepthSharedMemory:
             #print(f"Shared memory error: {e}")
             self.shm = None
 
-    def write_depths(self, depth_main, depth_sec):
-        """Write depths with reconnection attempt on failure"""
+    def write_depths(self, depth_main, depth_sec, frame_pos):
+        """Write depths and frame_pos with reconnection attempt on failure"""
         if self.shm is None and not self.create:
             # Try to reconnect if we're the consumer
             self.connect()
         if self.shm is None:
             return False
         try:
-            packed = struct.pack('dd', depth_main if depth_main is not None else 99.999999,
-                                     depth_sec  if depth_sec  is not None else 99.999999)
+            packed = struct.pack(
+                'ddd', 
+                depth_main if depth_main is not None else 99.999999,
+                depth_sec  if depth_sec  is not None else 99.999999,
+                frame_pos  if frame_pos  is not None else 99.999999
+            )
             self.shm.buf[:self.SIZE] = packed
             return True
         except Exception as e:
@@ -927,22 +982,23 @@ class DepthSharedMemory:
             return False
 
     def get_depth(self):
-        """Read depths with reconnection attempt on failure"""
+        """Read depths and frame_pos with reconnection attempt on failure"""
         if self.shm is None and not self.create:
             # Try to reconnect if we're the consumer
             self.connect()
         if self.shm is None:
-            return None, None
+            return None, None, None
         try:
             data = self.shm.buf[:self.SIZE]
-            depth_main, depth_sec = struct.unpack('dd', data)
+            depth_main, depth_sec, frame_pos = struct.unpack('ddd', data)
             if depth_main == 99.999999: depth_main = None
-            if depth_sec == 99.999999: depth_sec = None
-            return depth_main, depth_sec
+            if depth_sec  == 99.999999: depth_sec  = None
+            if frame_pos  == 99.999999: frame_pos  = None
+            return depth_main, depth_sec, frame_pos
         except Exception as e:
             print(f"Error reading from shared memory: {e}")
             self.shm = None  # Mark for reconnection attempt
-            return None, None
+            return None, None, None
 
     def close(self):
         if self.shm is not None:

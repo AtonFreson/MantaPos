@@ -758,13 +758,16 @@ def process_incoming_data():
     
         depth_main = None
         depth_sec = None
-        
+        frame_pos = None
+
+        if data_dicts[0].get("encoder"):
+            frame_pos = data_dicts[0]["encoder"].get("distance")
         if data_dicts[1].get("encoder"):
             depth_main = data_dicts[1]["encoder"].get("distance")
         if data_dicts[2].get("encoder"):
             depth_sec = data_dicts[2]["encoder"].get("distance")
             
-        depth_shared.write_depths(depth_main, depth_sec)
+        depth_shared.write_depths(depth_main, depth_sec, frame_pos)
     
         with data_lock:
             latest_data_dict = data_dicts.copy()

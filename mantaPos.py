@@ -31,6 +31,7 @@ new_camera_matrix = None
 # Set to True to enable position zeroing of markers based on camera position.
 enable_encoder_zeroing = False
 
+
 if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
     # ChArUco board settings
     squares_vertically = 6
@@ -233,7 +234,7 @@ try:
             position_shared.write_position(json.dumps(json_data))
 
         # Get the depth values from receiver.py
-        depth_main, depth_sec = depth_shared.get_depth()
+        depth_main, depth_sec, frame_pos = depth_shared.get_depth()
 
         # Display the winch depth balancing reference
         manta.display_balance_bar(frame, depth_main, depth_sec, font_scale=3, thickness=8, bar_height=200)
@@ -260,6 +261,12 @@ try:
             print(f"Snapshot saved in cam_captures as snapshot_{snapshot_number:04d}.png")
         elif key == ord('c'):
             snapnr = snapnr + 1
+        elif key == ord('o'):
+            if enable_encoder_zeroing: 
+                if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
+                    # Zero the position of the markers based on the camera position
+                    single_board_pos, single_board_rot = manta.zero_marker_position(tvec_list[0], rvec_list[0], rotation, depth_main, depth_sec, frame_pos)
+                    print(f"Zeroed position: {single_board_pos}, rotation: {single_board_rot}")
 
 except KeyboardInterrupt:
     print("User interrupted...")
