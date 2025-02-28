@@ -841,21 +841,22 @@ def frame_crop(frame, crop_size=0.7):
 # Function to zero the marker position based on the relative position of the marker from the camera, and the global position of the camera.
 def zero_marker_position(tvec, rvec, z0, z1, frame_pos):
     
-    adj = 3.8 # Horizontal distance between the depth sensors.
-    frame_pos_offset = 0.3 # Offset from the main depth sensor to the camera.
+    adj = 3.1305 # Horizontal distance between the depth sensors.
+    frame_horiz_pos_offset = 0.196 # Minimum offset from the main depth sensor to the camera.
+    frame_vert_pos_offset = 0.069 # Vertical offset from the main depth sensor to the camera.
     #x = 2.5 # Distance from the camera to the marker in the x direction.
     
-    frame_pos = frame_pos + frame_pos_offset
+    frame_pos = frame_pos + frame_horiz_pos_offset
     # Determine y position based on the frame position, where frame_pose makes up the hypotenuse of a right triangle.
     opp = z0 - z1
     hyp = np.sqrt((opp**2) + (adj**2))
     y = frame_pos/hyp * adj - adj/2
-    z = z0 - opp * frame_pos/hyp
+    z = z0 - opp * frame_pos/hyp - frame_vert_pos_offset
 
     # Camera rotation around x axis based on right triangle. Assume the camera is level otherwise.
     camera_rot_x = np.arctan(opp/adj)
 
-    x = tvec[0]
+    x = -tvec[0]
 
     camera_position = np.array([x, y, z])
     camera_rotation = np.array([camera_rot_x, 0, 0])
@@ -876,17 +877,6 @@ def zero_marker_position(tvec, rvec, z0, z1, frame_pos):
     marker_euler = R.from_matrix(marker_R_global).as_euler('xyz', degrees=True)
 
     return marker_global.flatten(), marker_euler
-
-# NEW: Function to calculate the marker's global position and rotation
-def calculate_marker_position(rvec, tvec, camera_pos_rot):
-	"""
-	Compute marker global pose given rvec, tvec from solvePnP and known camera global pose.
-	Parameters:
-	    rvec, tvec: Marker-to-camera transformation from solvePnP.
-	    camera_pos_rot: Tuple (camera_position, camera_rotation) where camera_rotation is in degrees.
-	Returns:
-	    marker_position (np.ndarray), marker_rotation (np.ndarray in degrees)
-	"""
 	
 
 class PressureSensorSystem:
