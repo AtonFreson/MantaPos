@@ -26,7 +26,7 @@ QUAD_CHARUCO_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
 QUAD_ARUCO_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
 
 # Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
-visualise_calib_dist = True
+visualise_calib_dist = False
 new_camera_matrix = None
 
 # Set to True to enable position zeroing of markers based on camera position.
@@ -261,7 +261,7 @@ try:
                     if number > snapshot_number:
                         snapshot_number = number
             snapshot_number = snapshot_number+1
-            cv2.imwrite(f"./cam_captures/snapshot_{snapshot_number:04d}.png", frame)
+            cv2.imwrite(f"./cam_captures/snapshot_{snapshot_number:04d}.png", gray_frame)
             print(f"Snapshot saved in cam_captures as snapshot_{snapshot_number:04d}.png")
         elif key == ord('c'):
             snapnr = snapnr + 1
