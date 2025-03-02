@@ -60,9 +60,9 @@ def add_circular_dots(marker_image, dot_offset, dot_radius, dict_size=5):
     
     return marker_image
 
-def create_and_save_ChArUco_board(sq_len_meters, sq_pixels, margin_pixels, mrkr_ratio=0.9, sqs_vert=5, sqs_hor=7, file_path='ChArUco_Marker.png', img_size=None, marker_ids=None, dot_offset=0):        
-    dictionary = aruco.getPredefinedDictionary(ARUCO_DICT)
-    int_marker_len_in_image = sq_len_meters*(round(sq_pixels*mrkr_ratio)/sq_pixels)
+def create_and_save_ChArUco_board(sq_len_meters, sq_pixels, margin_pixels, mrkr_ratio=0.9, sqs_vert=5, sqs_hor=7, file_path='ChArUco_Marker.png', img_size=None, marker_ids=None, dot_offset=0, dictionary=aruco.getPredefinedDictionary(ARUCO_DICT)):
+    #int_marker_len_in_image = sq_len_meters*(round(sq_pixels*mrkr_ratio)/sq_pixels)
+    int_marker_len_in_image = sq_len_meters*mrkr_ratio
     
     if marker_ids is not None:
     # Use only the specified marker IDs
@@ -82,17 +82,17 @@ def create_and_save_ChArUco_board(sq_len_meters, sq_pixels, margin_pixels, mrkr_
     file_name = os.path.join(calib_dir, file_path)
     cv2.imwrite(file_name, img)
 
-    return board, dictionary
+    return board
 
 # Generate Aruco marker starting with ID 18, and forward
 if __name__ == "__main__":
     if not os.path.exists(calib_dir):
         os.makedirs(calib_dir)
 
-    #for i in range(1,2):
-    #    generate_aruco_marker(i, ARUCO_DICT, 11811)
+    for i in range(0, 50):
+        generate_aruco_marker(i, ARUCO_DICT, 11811)
 
-
+'''
     img_size = (12993, 12993) # Image size in pixels
     #img_size = (7088, 7088) # Image size in pixels
     squares_vertically = 6
@@ -110,3 +110,4 @@ if __name__ == "__main__":
         #create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally, f'ChArUco_Marker_{i}.png', img_size, marker_ids)
         
         create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally, f'ChArUco_Marker_{i}.png', img_size, None, dot_offset)
+'''

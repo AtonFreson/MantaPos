@@ -12,6 +12,7 @@ import json
 # Initialize parameters
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
 camera_calibration_file = 'camera_calibration_4K-38_20-picked.npz'
+disable_camera = True  # Set to True to disable the camera and use test frames instead
 
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 
@@ -32,17 +33,21 @@ new_camera_matrix = None
 enable_encoder_zeroing = False
 
 
+base_dict = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
+dictionary = cv2.aruco.Dictionary(1, base_dict.markerSize, base_dict.maxCorrectionBits)
 if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
     # ChArUco board settings
     squares_vertically = 6
     squares_horizontally = squares_vertically
-    square_pixels = int(140*7/squares_horizontally) # Pixel size of the chessboard squares
-    grid_edge = 20 # Pixel margin outside the ChArUco grid
     marker_ratio = 0.75 # Marker ratio of square_length to fit within white squares; acceptable maximum 0.85, recommended 0.7. Rounds marker size to int.
     square_length = 1.000/squares_vertically # Real world length of square in meters
-    
+    marker_number = 17  # Maximum marker number to use, starts at 0
+
+    # Create a custom dictionary with only the specified marker
+    dictionary.bytesList = base_dict.bytesList[0:marker_number+1]
+
     # Generate the marker grid
-    board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
+    board = genMarker.create_and_save_ChArUco_board(square_length, 400, 20, marker_ratio, squares_vertically, squares_horizontally, dictionary=dictionary)
 
     # Precompute board center offset to center the coordinate system
     single_board_width = (squares_horizontally - 0) * square_length
@@ -65,8 +70,6 @@ elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Single":
                             [0, marker_length, 0]], dtype=np.float32)
     
     # Create a custom dictionary with only the specified marker
-    base_dict = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
-    dictionary = cv2.aruco.Dictionary(1, base_dict.markerSize, base_dict.maxCorrectionBits)
     dictionary.bytesList = base_dict.bytesList[marker_number:marker_number+1]
     
 # Define the detector and parameters
@@ -74,7 +77,7 @@ params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
-cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR)
+cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR, disable_camera)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
 frame_number = 0
 
@@ -113,8 +116,8 @@ try:
         
         #frame = manta.frame_corner_cutout(frame, 0.3)  # Cut out the corners of the frame 
         #frame = manta.frame_crop(frame, 0.7)  # Crop the frame to remove fisheye edges
-        #test_frame = cv2.imread(f"../cam_captures/snapshot_{snapnr:04d}.png")
-        #frame = test_frame.copy()
+        if disable_camera:
+            frame = test_frame.copy()
         #cv2.imwrite('ArUco_Marker_test.png', frame)
 
         # Convert to grayscale
@@ -188,7 +191,7 @@ try:
                         markers_pos_rot.append([single_board_pos, single_board_rot])
 
                         # Draw axes of the board
-                        cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, rvec, tvec, square_length*squares_vertically/2, round(square_length*square_pixels/2))
+                        cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, rvec, tvec, square_length*squares_vertically/2, 10)
 
             # Single ArUco marker detection
             elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Single":
@@ -249,11 +252,12 @@ try:
             break
         elif key == 32:
             # Check what the highest number in the snapshot folder is, and enumerate from there
-            snapshot_number = 0
+            snapshot_number = -1
+            if not os.path.exists("./cam_captures"):
+                os.makedirs("./cam_captures")
             for file in os.listdir("./cam_captures"):
                 if file.endswith(".png"):
                     number = int(file.split("_")[1].split(".")[0])
-                    print(number)
                     if number > snapshot_number:
                         snapshot_number = number
             snapshot_number = snapshot_number+1
@@ -261,6 +265,18 @@ try:
             print(f"Snapshot saved in cam_captures as snapshot_{snapshot_number:04d}.png")
         elif key == ord('c'):
             snapnr = snapnr + 1
+            try:
+                test_frame = cv2.imread(f"../cam_captures-full_test/snapshot_{snapnr:04d}.png")
+            except:
+                print(f"Error: Could not load snapshot_{snapnr:04d}.png")
+        elif key == ord('v'):
+            snapnr = snapnr - 1
+            if snapnr < 1:
+                snapnr = 12
+            try:
+                test_frame = cv2.imread(f"../cam_captures-full_test/snapshot_{snapnr:04d}.png")
+            except:
+                print(f"Error: Could not load snapshot_{snapnr:04d}.png")
         elif key == ord('o'):
             if enable_encoder_zeroing: 
                 if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
