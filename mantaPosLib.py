@@ -988,7 +988,7 @@ class PressureSensorSystem:
 # Class to handle shared memory for depth values, used to send values from receiver to mantaPos
 class DepthSharedMemory:
     SHM_NAME = "mantaPos_depth"
-    SIZE = 24  # 3 x 8-byte floats
+    SIZE = 32  # 3 x 8-byte floats (depth_main, depth_sec, frame_pos) + 1 x 8-byte integer for timestamp
     
     def __init__(self, create=False):
         self.create = create
@@ -1007,7 +1007,7 @@ class DepthSharedMemory:
                     pass
                 # Create new shared memory block and initialize with default values
                 self.shm = shared_memory.SharedMemory(name=self.SHM_NAME, create=True, size=self.SIZE)
-                self.shm.buf[:self.SIZE] = struct.pack('ddd', 99.999999, 99.999999, 99.999999)
+                self.shm.buf[:self.SIZE] = struct.pack('dddq', 99.999999, 99.999999, 99.999999, 0)
             else:
                 # Try to attach to existing shared memory
                 self.shm = shared_memory.SharedMemory(name=self.SHM_NAME)
@@ -1015,8 +1015,8 @@ class DepthSharedMemory:
             #print(f"Shared memory error: {e}")
             self.shm = None
 
-    def write_depths(self, depth_main, depth_sec, frame_pos):
-        """Write depths and frame_pos with reconnection attempt on failure"""
+    def write_depths(self, depth_main, depth_sec, frame_pos, timestamp=0):
+        """Write depths, frame_pos and timestamp with reconnection attempt on failure"""
         if self.shm is None and not self.create:
             # Try to reconnect if we're the consumer
             self.connect()
@@ -1024,10 +1024,11 @@ class DepthSharedMemory:
             return False
         try:
             packed = struct.pack(
-                'ddd', 
+                'dddq', 
                 depth_main if depth_main is not None else 99.999999,
                 depth_sec  if depth_sec  is not None else 99.999999,
-                frame_pos  if frame_pos  is not None else 99.999999
+                frame_pos  if frame_pos  is not None else 99.999999,
+                int(timestamp) if timestamp is not None else 0
             )
             self.shm.buf[:self.SIZE] = packed
             return True
@@ -1037,23 +1038,24 @@ class DepthSharedMemory:
             return False
 
     def get_depth(self):
-        """Read depths and frame_pos with reconnection attempt on failure"""
+        """Read depths, frame_pos and timestamp with reconnection attempt on failure"""
         if self.shm is None and not self.create:
             # Try to reconnect if we're the consumer
             self.connect()
         if self.shm is None:
-            return None, None, None
+            return None, None, None, None
         try:
             data = self.shm.buf[:self.SIZE]
-            depth_main, depth_sec, frame_pos = struct.unpack('ddd', data)
+            depth_main, depth_sec, frame_pos, timestamp = struct.unpack('dddq', data)
             if depth_main == 99.999999: depth_main = None
             if depth_sec  == 99.999999: depth_sec  = None
             if frame_pos  == 99.999999: frame_pos  = None
-            return depth_main, depth_sec, frame_pos
+            if timestamp  == 0: timestamp = None
+            return depth_main, depth_sec, frame_pos, timestamp
         except Exception as e:
             print(f"Error reading from shared memory: {e}")
             self.shm = None  # Mark for reconnection attempt
-            return None, None, None
+            return None, None, None, None
 
     def close(self):
         if self.shm is not None:

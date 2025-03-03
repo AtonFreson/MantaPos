@@ -222,10 +222,12 @@ try:
             frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
 
         # Get the depth values from receiver.py
-        #depth_main, depth_sec, frame_pos = depth_shared.get_depth()
+        #depth_main, depth_sec, frame_pos, depth_timestamp = depth_shared.get_depth()
         depth_main = depth_main_list[snapnr-1]
         depth_sec = depth_sec_list[snapnr-1]
         frame_pos = frame_pos_list[snapnr-1]
+        depth_timestamp = int(datetime.now().timestamp()*1000)
+        
         ref_pos, ref_rot = manta.global_reference_pos(depth_main, depth_sec, frame_pos)
 
         if success:
@@ -247,7 +249,7 @@ try:
             }
             if ref_pos is not None and ref_rot is not None:
                 json_data["global_pos"] = {
-                    "timestamp": int(datetime.now().timestamp() * 1000),
+                    "timestamp": depth_timestamp,
                     "position": ref_pos.tolist(),
                     "rotation": ref_rot.tolist()
                 }

@@ -776,15 +776,22 @@ def process_incoming_data():
         depth_main = None
         depth_sec = None
         frame_pos = None
+        timestamps = []
 
         if data_dicts[0].get("encoder"):
             frame_pos = data_dicts[0]["encoder"].get("distance")
+            timestamps.append(int(data_dicts[0]["encoder"].get("timestamp", 0)))
         if data_dicts[1].get("encoder"):
             depth_main = data_dicts[1]["encoder"].get("distance")
+            timestamps.append(int(data_dicts[1]["encoder"].get("timestamp", 0)))
         if data_dicts[2].get("encoder"):
             depth_sec = data_dicts[2]["encoder"].get("distance")
-            
-        depth_shared.write_depths(depth_main, depth_sec, frame_pos)
+            timestamps.append(int(data_dicts[2]["encoder"].get("timestamp", 0)))
+        
+        # Find the oldest timestamp (smallest value)
+        timestamp_oldest = min(timestamps) if len(timestamps) == 3 else None
+        
+        depth_shared.write_depths(depth_main, depth_sec, frame_pos, timestamp_oldest)
     
         with data_lock:
             latest_data_dict = data_dicts.copy()
