@@ -11,6 +11,7 @@ import pickle
 import struct
 from multiprocessing import shared_memory
 from pressureSensorCalibration import PiecewiseLinearAlternate
+from pytesseract import image_to_string
 
 # Function to extract the numerical index from the filename
 def extract_index(filename):
@@ -662,12 +663,21 @@ def calculate_camera_position(tvec, rvec, marker_pos_rot):
     return t_camera_global.flatten(), euler_angles_global
 
 # Function to display the position and orientation of the camera in the global coordinate system
-def display_camera_position(frame, position, rotation, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, 
-                            text_color=(0, 255, 0), thickness=1, alpha=0.5, rect_padding=(10, 10, 600, 75)):
+def display_camera_position(frame, position, rotation, ref_pos, ref_rot, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, 
+                            text_color=(0, 255, 0), thickness=1, alpha=0.5, rect_padding=(10, 10, 600, 150)):
     
     # Create a position text with fixed-width formatting to prevent text shifting
-    position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={-position[1]: >+6.3f}m, Z={-position[2]: >+6.3f}m")
+    position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={position[1]: >+6.3f}m, Z={position[2]: >+6.3f}m")
+    if ref_pos is not None:
+        position_err_text = (f"Err.: X={ref_pos[0]-position[0]: >+6.3f}m, Y={ref_pos[1]-position[1]: >+6.3f}m, Z={ref_pos[2]-position[2]: >+6.3f}m")
+    else:
+        position_err_text = "Err.: N/A"
+        
     rotation_text = (f"Rot: R={rotation[0]: >+6.3f}', P={rotation[1]: >+6.3f}', Y={rotation[2]: >+6.3f}'")
+    if ref_rot is not None:
+        rotation_err_text = (f"Err.: R={ref_rot[0]-rotation[0]: >+6.3f}', P={ref_rot[1]-rotation[1]: >+6.3f}', Y={ref_rot[2]-rotation[2]: >+6.3f}'")
+    else:
+        rotation_err_text = "Err.: N/A"
 
     # Unpack rectangle bounds
     x, y, w, h = rect_padding
@@ -679,19 +689,23 @@ def display_camera_position(frame, position, rotation, font=cv2.FONT_HERSHEY_SIM
     cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
 
     # Put text on the overlay
-    cv2.putText(overlay, position_text, (x+20, y + int(h / 2.5)), font, font_scale, text_color, thickness)
-    cv2.putText(overlay, rotation_text, (x+20, y + int(h / 1.15)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, position_text, (x+20, y + int(h / 4.5)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, position_err_text, (x+20, y + int(h / 2.4)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_text, (x+20, y + int(h / 1.4)), font, font_scale, text_color, thickness)
+    cv2.putText(overlay, rotation_err_text, (x+20, y + int(h / 1.1)), font, font_scale, text_color, thickness)
     
     # Apply the overlay
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
 # Class to read frames from an RTSP camera stream, with minimal buffering for real-time applications. Wrapper around OpenCV's VideoCapture class.
-# Set timestamp=True to read the timestamp along with the frame.
+# Set ocr_timestamp=True to read the timestamp along with the frame.
 class RealtimeCapture:
-    def __init__(self, rtsp_url, disable=False):
+    def __init__(self, rtsp_url, disable=False, ocr_timestamp = False):
+        self.ocr_timestamp = ocr_timestamp
         self.disable = disable
         if self.disable:
             return
+        
         self.rtsp_url = rtsp_url
         self._cap = cv2.VideoCapture(rtsp_url)
         if not self._cap.isOpened():
@@ -703,6 +717,13 @@ class RealtimeCapture:
         self._capture_thread = None
         # Configure camera buffer size
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # Instance variables for millisecond offset refinement
+        self._frame_ms_offset = None
+        self._offset_stable_count = 0
+        self._prev_ocr_second = None
+        self.ocr_config = "--psm 7 -c tessedit_char_whitelist=0123456789"
+
         # Start automatically
         self.start()
 
@@ -750,22 +771,63 @@ class RealtimeCapture:
         while self._running:
             ret, frame = self._cap.read()
             if ret:
-                timestamp = datetime.now().isoformat(timespec='microseconds')
+                if self.ocr_timestamp:
+                    # Get current computer time
+                    comp_time = datetime.now()
+                    comp_sec = comp_time.second
+                    comp_ms = comp_time.microsecond // 1000
+
+                    # Extract ROI for seconds reading (region at (606,90) with size (76,51))
+                    roi = frame[90:90+51, 606:606+76]
+                    ocr_text = image_to_string(roi, config=self.ocr_config)
+                    try:
+                        ocr_sec = int(''.join(filter(str.isdigit, ocr_text)))
+                    except Exception:
+                        ocr_sec = comp_sec
+                        print(f"Error: OCR failed to read seconds in '{ocr_text}'. Using computer time.")
+
+                    # Adjust minute if computer seconds is near 0 but OCR seconds is high
+                    if comp_sec < 10 and ocr_sec >= 50:
+                        comp_sec += 60
+                        adjusted_hour = comp_time.hour if comp_time.minute > 0 else (comp_time.hour - 1) % 24
+                        comp_time = comp_time.replace(hour=adjusted_hour, minute=(comp_time.minute - 1) % 60)
+                    
+                    # Refine millisecond offset:
+                    if self._prev_ocr_second is not None and self._prev_ocr_second != ocr_sec:
+                        # New second observed: update offset if current ms offset is smaller
+                        if self._frame_ms_offset is None or comp_ms < self._frame_ms_offset:
+                            self._frame_ms_offset = comp_ms
+                            self._offset_stable_count = 0
+                        else:
+                            self._offset_stable_count += 1
+                        if self._offset_stable_count == 20:
+                            print(f"Stable camera delay determined at: {comp_sec-ocr_sec}.{self._frame_ms_offset} seconds.")
+                    else:
+                        # Same second as previous frame: reset offset and counter
+                        self._prev_ocr_second = ocr_sec
+
+                    # Compose the final timestamp with refined ms offset and OCR seconds
+                    final_timestamp = comp_time.replace(second=ocr_sec, microsecond=(comp_ms-self._frame_ms_offset) * 1000)
+                    timestamp_str = final_timestamp.isoformat(timespec='milliseconds')
+
                 with self._frame_lock:
                     self._current_frame = frame
-                    self._current_timestamp = timestamp
+                    if self.ocr_timestamp:
+                        self._current_timestamp = timestamp_str
             else:
                 print("Error: Could not read from camera.")
                 self.stop()
             time.sleep(0.001)
 
-    def read(self, timestamp=False):
+    def read(self):
         if self.disable:
-            return (True, None)
+            return (True, None) if not self.ocr_timestamp else (True, None, datetime.now().timestamp() * 1000)
         with self._frame_lock:
             if self._current_frame is None:
-                return (False, None) if not timestamp else (False, None, None)
-            return (True, self._current_frame.copy()) if not timestamp else (True, self._current_frame.copy(), self._current_timestamp)
+                return (False, None) if not self.ocr_timestamp else (False, None, None)
+            if self.ocr_timestamp:
+                return (True, self._current_frame.copy(), self._current_timestamp)
+            return (True, self._current_frame.copy())
 
     def __enter__(self):
         if self.disable:
@@ -829,28 +891,7 @@ def frame_crop(frame, crop_size=0.7):
     return frame
 
 # Function to zero the marker position based on the relative position of the marker from the camera, and the global position of the camera.
-def zero_marker_position(tvec, rvec, z0, z1, frame_pos):
-    
-    adj = 3.1305 # Horizontal distance between the depth sensors.
-    frame_horiz_pos_offset = 0.196 # Minimum offset from the main depth sensor to the camera.
-    frame_vert_pos_offset = 0.069 # Vertical offset from the main depth sensor to the camera.
-    #x = 2.5 # Distance from the camera to the marker in the x direction.
-    
-    frame_pos = frame_pos + frame_horiz_pos_offset
-    # Determine y position based on the frame position, where frame_pose makes up the hypotenuse of a right triangle.
-    opp = z0 - z1
-    hyp = np.sqrt((opp**2) + (adj**2))
-    y = frame_pos/hyp * adj - adj/2
-    z = z0 - opp * frame_pos/hyp - frame_vert_pos_offset
-
-    # Camera rotation around x axis based on right triangle. Assume the camera is level otherwise.
-    camera_rot_x = np.arctan(opp/adj)
-
-    x = -tvec[0]
-
-    camera_position = np.array([x, y, z])
-    camera_rotation = np.array([camera_rot_x, 0, 0])
-
+def zero_marker_position(tvec, rvec, camera_position, camera_rotation):
     ## Calculate the positon of the marker in the global coordinate system. ##
     R_marker_camera, _ = cv2.Rodrigues(rvec)
 	# Invert to get camera pose in marker coordinates
@@ -867,7 +908,41 @@ def zero_marker_position(tvec, rvec, z0, z1, frame_pos):
     marker_euler = R.from_matrix(marker_R_global).as_euler('xyz', degrees=True)
 
     return marker_global.flatten(), marker_euler
-	
+
+# Function to provide the global reference coordinate position of the camera system based on the depth and frame_pos encoder values.
+def global_reference_pos(z0, z1, frame_pos):
+    if None in (z0, z1, frame_pos):
+        return None, None
+    
+    # Invert z0 and z1, since input is from the depth sensors
+    z0 = -z0
+    z1 = -z1
+
+    # Constants for the frame pool setup, in meters.
+    adj = 3.1305 # Horizontal distance between the depth sensors.
+    frame_x_pos_offset = 0.196 # Minimum frame offset from the main depth sensor to the camera.
+    #frame_z_pos_offset = 0.069 # Vertical frame offset from the main depth sensor to the camera.
+
+    camera_x_offset = -1.369 - 0.250 # Maximum zeroing offset of the camera from the center of the pool in the x-direction.
+    camera_y_offset = 1.45 - 0.04 # Offset of the camera from the center of the pool in the y-direction.
+    camera_z_offset = -0.1186 + 0.221 # Offset of the camera at the zeroing position at the top of the pool in the z-direction.
+    
+    frame_pos = frame_pos + frame_x_pos_offset
+    # Determine y position based on the frame position, where frame_pose makes up the hypotenuse of a right triangle.
+    opp = z0 - z1
+    hyp = np.sqrt((opp**2) + (adj**2))
+
+    x = frame_pos/hyp * adj + camera_x_offset
+    y = camera_y_offset
+    z = z0 - opp * frame_pos/hyp + camera_z_offset
+
+    # Camera rotation around y-axis based on right triangle. Assume the camera is level otherwise.
+    camera_rot_y = np.arctan(opp/adj)
+
+    camera_position = np.array([x, y, z])
+    camera_rotation = np.array([0, camera_rot_y, 0])
+
+    return camera_position, camera_rotation
 
 class PressureSensorSystem:
     def __init__(self):
@@ -1037,8 +1112,12 @@ class PositionSharedMemory:
             encoded = json_string.encode('utf-8')
             if len(encoded) > self.SIZE - 1:
                 raise ValueError(f"Data too large for shared memory ({len(encoded)} bytes). Please increase SIZE in the PositionSharedMemory class.")
-            self.new_content[0] = 1  # mark new packet as unread
+            # Set the flag to indicate a new unread packet
+            self.new_content[0] = 1  
+            # Insert the encoded data
             self.new_content[1:1+len(encoded)] = encoded
+            # Fill the remaining unused space with null bytes
+            self.new_content[1+len(encoded):] = b'\x00' * (self.SIZE - 1 - len(encoded))
             self.shm.buf[:self.SIZE] = self.new_content
             return True
         except Exception as e:

@@ -77,7 +77,7 @@ params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
-cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR, disable_camera)
+cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR, disable_camera, True)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
 frame_number = 0
 
@@ -103,13 +103,18 @@ position_shared = manta.PositionSharedMemory(create=False)
 test_frame = cv2.imread("./snapshots/snapshot_0793.png")
 snapnr = 1
 
+
+
+depth_main_list = [3.29482, 3.29482, 3.29482, 3.29482, 3.29482, 4.56092, 4.56092, 4.56092, 4.56092, 7.01261, 7.01261, 7.01261]
+depth_sec_list = [3.28974, 3.28974, 3.28974, 3.28974, 3.28974, 4.55399, 4.55399, 4.55399, 4.55399, 7.00989, 7.00989, 7.00989]
+frame_pos_list = [2.70515, 2.70515, 2.70515, 2.70515/2, 0.0, 0.0, 0.0, 2.70515/2, 2.70515, 0.0, 2.70515/2, 2.70515]
 # Main loop
 try:
     while True:
         success = False
 
         # Capture camera frame
-        ret, frame = cap.read()
+        ret, frame, camera_timestamp = cap.read()
         if not ret:
             print("Error: Could not read from camera.")
             break
@@ -216,28 +221,38 @@ try:
                 new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w,h), 1)
             frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
 
+        # Get the depth values from receiver.py
+        #depth_main, depth_sec, frame_pos = depth_shared.get_depth()
+        depth_main = depth_main_list[snapnr-1]
+        depth_sec = depth_sec_list[snapnr-1]
+        frame_pos = frame_pos_list[snapnr-1]
+        ref_pos, ref_rot = manta.global_reference_pos(depth_main, depth_sec, frame_pos)
+
         if success:
             # Calculate and display position and rotation
             if MARKER_TYPE[1] == "Single":
                 #position, position_std, rotation, rotation_std = manta.display_position_ChArUco(frame, tvec_list, rvec_list, markers_pos_rot, camera_matrix, 
                 # dist_coeffs, object_points_all, image_points_all, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,400))
                 position, rotation = manta.calculate_camera_position(tvec_list[0], rvec_list[0], markers_pos_rot[0])
-                manta.display_camera_position(frame, position, rotation, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,200))
+                manta.display_camera_position(frame, position, rotation, ref_pos, ref_rot, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,350))
 
             json_data = {
                 "mpu_unit": MPU_UNIT,
                 "packet_number": frame_number,
                 "camera": {
-                    "timestamp": int(datetime.now().timestamp() * 1000),
+                    "timestamp": int(camera_timestamp),
                     "position": position.tolist(),
                     "rotation": rotation.tolist()
                 }
             }
+            if ref_pos is not None and ref_rot is not None:
+                json_data["global_pos"] = {
+                    "timestamp": int(datetime.now().timestamp() * 1000),
+                    "position": ref_pos.tolist(),
+                    "rotation": ref_rot.tolist()
+                }
             frame_number += 1
             position_shared.write_position(json.dumps(json_data))
-
-        # Get the depth values from receiver.py
-        depth_main, depth_sec, frame_pos = depth_shared.get_depth()
 
         # Display the winch depth balancing reference
         manta.display_balance_bar(frame, depth_main, depth_sec, font_scale=3, thickness=8, bar_height=200)
@@ -263,13 +278,15 @@ try:
             snapshot_number = snapshot_number+1
             cv2.imwrite(f"./cam_captures/snapshot_{snapshot_number:04d}.png", gray_frame)
             print(f"Snapshot saved in cam_captures as snapshot_{snapshot_number:04d}.png")
-        elif key == ord('c'):
+        elif key == ord('d'):
             snapnr = snapnr + 1
+            if snapnr > 12:
+                snapnr = 1
             try:
                 test_frame = cv2.imread(f"../cam_captures-full_test/snapshot_{snapnr:04d}.png")
             except:
                 print(f"Error: Could not load snapshot_{snapnr:04d}.png")
-        elif key == ord('v'):
+        elif key == ord('a'):
             snapnr = snapnr - 1
             if snapnr < 1:
                 snapnr = 12
@@ -281,7 +298,7 @@ try:
             if enable_encoder_zeroing: 
                 if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
                     # Zero the position of the markers based on the camera position
-                    single_board_pos, single_board_rot = manta.zero_marker_position(tvec_list[0], rvec_list[0], rotation, depth_main, depth_sec, frame_pos)
+                    single_board_pos, single_board_rot = manta.zero_marker_position(tvec_list[0], rvec_list[0], ref_pos, ref_rot)
                     print(f"Zeroed position: {single_board_pos}, rotation: {single_board_rot}")
 
 except KeyboardInterrupt:

@@ -189,18 +189,34 @@ def create_unit_lines(data_dict, unit_number):
         lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
         time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
         position = cam["position"]
-        #position_std = cam["position_std"]
         rotation = cam["rotation"]
-        #rotation_std = cam["rotation_std"]
         
         lines.append(" Position:")
-        lines.append(f"  X=     {position[0]: >+6.3f}m")# ±{position_std[0]: >6.3f}")
-        lines.append(f"  Y=     {position[1]: >+6.3f}m")# ±{position_std[1]: >6.3f}")
-        lines.append(f"  Z=     {position[2]: >+6.3f}m")# ±{position_std[2]: >6.3f}")
+        lines.append(f"  X=     {position[0]: >+6.3f}m")
+        lines.append(f"  Y=     {position[1]: >+6.3f}m")
+        lines.append(f"  Z=     {position[2]: >+6.3f}m")
         lines.append(" Rotation:")
-        lines.append(f"  X=     {rotation[0]: >+6.3f} deg")# ±{rotation_std[0]: >6.3f}")
-        lines.append(f"  Y=     {rotation[1]: >+6.3f} deg")# ±{rotation_std[1]: >6.3f}")
-        lines.append(f"  Z=     {rotation[2]: >+6.3f} deg")# ±{rotation_std[2]: >6.3f}")
+        lines.append(f"  X=     {rotation[0]: >+6.3f} deg")
+        lines.append(f"  Y=     {rotation[1]: >+6.3f} deg")
+        lines.append(f"  Z=     {rotation[2]: >+6.3f} deg")
+        lines.append("")
+    
+    if "global_pos" in data_dict:
+        pos = data_dict["global_pos"]
+        lines.append("Global Position Data:")
+        lines.append(f"-- Time: {int(pos['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(pos['timestamp'], time_diff, unit_number)
+        position = pos["position"]
+        rotation = pos["rotation"]
+
+        lines.append(" Position:")
+        lines.append(f"  X=     {position[0]: >+6.3f}m")
+        lines.append(f"  Y=     {position[1]: >+6.3f}m")
+        lines.append(f"  Z=     {position[2]: >+6.3f}m")
+        lines.append(" Rotation:")
+        lines.append(f"  X=     {rotation[0]: >+6.3f} deg")
+        lines.append(f"  Y=     {rotation[1]: >+6.3f} deg")
+        lines.append(f"  Z=     {rotation[2]: >+6.3f} deg")
         lines.append("")
 
     if "encoder" in data_dict:
@@ -303,7 +319,7 @@ def create_unit_lines(data_dict, unit_number):
     if data_dict != {}:
         # Fit data for unit 4
         if unit_number == 4:
-            lines = lines[:-11]
+            lines = lines[:-11*(2 if "global_pos" in data_dict else 1)]
 
         if "ptp" not in data_dict:
             lines.append("Clock Info:")
@@ -677,6 +693,7 @@ def process_incoming_data():
                 data_str, recv_time = new_item
                 data_dict = json.loads(data_str)
                 unit_num_str = data_dict.get("mpu_unit")
+
                 if unit_num_str is None:
                     print("Warning: 'mpu_unit' key missing in data")
                 else:
