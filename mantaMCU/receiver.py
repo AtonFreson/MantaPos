@@ -40,7 +40,7 @@ sock.settimeout(0.5)
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-# Initialize shared memory for depth values (as creator) and position values (as reader)
+# Initialize shared memory for depth values (as creator) and position values (as creator)
 depth_shared = manta.DepthSharedMemory(create=True)
 position_shared = manta.PositionSharedMemory(create=True)
 
@@ -191,6 +191,7 @@ def create_unit_lines(data_dict, unit_number):
         position = cam["position"]
         rotation = cam["rotation"]
         
+        lines.append(f" Avg. FPS: {cam['fps']:.2f}")
         lines.append(" Position:")
         lines.append(f"  X=     {position[0]: >+6.3f}m")
         lines.append(f"  Y=     {position[1]: >+6.3f}m")
@@ -217,6 +218,7 @@ def create_unit_lines(data_dict, unit_number):
         lines.append(f"  X=     {rotation[0]: >+6.3f} deg")
         lines.append(f"  Y=     {rotation[1]: >+6.3f} deg")
         lines.append(f"  Z=     {rotation[2]: >+6.3f} deg")
+        lines.append("")
         lines.append("")
 
     if "encoder" in data_dict:
@@ -319,7 +321,7 @@ def create_unit_lines(data_dict, unit_number):
     if data_dict != {}:
         # Fit data for unit 4
         if unit_number == 4:
-            lines = lines[:-11*(2 if "global_pos" in data_dict else 1)]
+            lines = lines[:-12*(2 if "global_pos" in data_dict else 1)]
 
         if "ptp" not in data_dict:
             lines.append("Clock Info:")

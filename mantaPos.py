@@ -12,7 +12,8 @@ import json
 # Initialize parameters
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
 camera_calibration_file = 'camera_calibration_4K-38_20-picked.npz'
-disable_camera = True  # Set to True to disable the camera and use test frames instead
+disable_camera = False  # Set to True to disable the camera and use test frames instead
+enable_ocr_timestamp = True  # Set to True to enable OCR timestamp reading for precise camera timestamping
 
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 
@@ -60,8 +61,8 @@ if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
 elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Single":
     # Large ArUco marker settings
     marker_length = 1.000 # in meters
-    marker_number = 0  # Marker number to use
-    single_marker_pos = [0.1, 0.1]  # Offset position of the marker in meters
+    marker_number = 3  # Marker number to use
+    single_marker_pos = [0,0,0]  # Offset position of the marker in meters
     single_marker_rot = [0,0,0]  # Euler rotation of the marker in degrees, origin is normal around z
 
     object_points = np.array([[0, 0, 0], 
@@ -77,7 +78,7 @@ params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
 # Initialize camera
-cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR, disable_camera, True)
+cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR, disable_camera, enable_ocr_timestamp)
 cv2.namedWindow("Camera Preview with Position", cv2.WINDOW_NORMAL)
 frame_number = 0
 
@@ -114,7 +115,8 @@ try:
         success = False
 
         # Capture camera frame
-        ret, frame, camera_timestamp = cap.read()
+        ret, frame, camera_timestamp, camera_fps = cap.read()
+        #print(f"Camera FPS: {camera_fps:.2f}, Timestamp: {camera_timestamp}")
         if not ret:
             print("Error: Could not read from camera.")
             break
@@ -138,13 +140,14 @@ try:
 
         if ids is not None and len(ids) > 0:
             # Refine detected markers for better accuracy
-            detector.refineDetectedMarkers(
-                image=gray_frame,
-                board=board,
-                detectedCorners=corners,
-                detectedIds=ids,
-                rejectedCorners=rejected_img_points
-            )
+            if MARKER_TYPE[0] == "ChArUco":
+                detector.refineDetectedMarkers(
+                    image=gray_frame,
+                    board=board,
+                    detectedCorners=corners,
+                    detectedIds=ids,
+                    rejectedCorners=rejected_img_points
+                )
 
             # Modify the displayed markers to make them unreadable. Use: blur, cross, fill, diamond
             try:
@@ -222,11 +225,12 @@ try:
             frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
 
         # Get the depth values from receiver.py
-        #depth_main, depth_sec, frame_pos, depth_timestamp = depth_shared.get_depth()
-        depth_main = depth_main_list[snapnr-1]
-        depth_sec = depth_sec_list[snapnr-1]
-        frame_pos = frame_pos_list[snapnr-1]
-        depth_timestamp = int(datetime.now().timestamp()*1000)
+        depth_main, depth_sec, frame_pos, depth_timestamp = depth_shared.get_depth()
+        if disable_camera:
+            depth_main = depth_main_list[snapnr-1]
+            depth_sec = depth_sec_list[snapnr-1]
+            frame_pos = frame_pos_list[snapnr-1]
+            depth_timestamp = int(datetime.now().timestamp()*1000)
         
         ref_pos, ref_rot = manta.global_reference_pos(depth_main, depth_sec, frame_pos)
 
@@ -242,7 +246,8 @@ try:
                 "mpu_unit": MPU_UNIT,
                 "packet_number": frame_number,
                 "camera": {
-                    "timestamp": int(camera_timestamp),
+                    "timestamp": camera_timestamp,
+                    "fps": camera_fps,
                     "position": position.tolist(),
                     "rotation": rotation.tolist()
                 }

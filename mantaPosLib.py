@@ -5,13 +5,13 @@ from threading import Thread, Lock
 import time
 from datetime import datetime
 import os
+import sys
 import re
 from scipy.spatial.transform import Rotation as R
 import pickle
 import struct
 from multiprocessing import shared_memory
 from pressureSensorCalibration import PiecewiseLinearAlternate
-from pytesseract import image_to_string
 
 # Function to extract the numerical index from the filename
 def extract_index(filename):
@@ -636,10 +636,13 @@ def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera
 # Function to calculate the camera position and orientation in the global coordinate system
 def calculate_camera_position(tvec, rvec, marker_pos_rot):
     # Marker position and rotation in global coordinates
+    print(marker_pos_rot)
+    print(tvec)
+    print(rvec)
     marker_pos, marker_rot = marker_pos_rot
     x, y, z = marker_pos
     roll_deg, pitch_deg, yaw_deg = marker_rot
-
+    
     # Convert rotation vector to rotation matrix
     R_marker_camera, _ = cv2.Rodrigues(rvec)
     t_marker_camera = tvec.reshape((3, 1))
@@ -719,10 +722,13 @@ class RealtimeCapture:
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
         # Instance variables for millisecond offset refinement
-        self._frame_ms_offset = None
-        self._offset_stable_count = 0
+        self._frame_ms_offset = 999
         self._prev_ocr_second = None
-        self.ocr_config = "--psm 7 -c tessedit_char_whitelist=0123456789"
+        
+        # Variables for FPS calculation
+        self._fps_window = [10]
+        self._current_fps = 0.0
+        self._last_frame_time = None
 
         # Start automatically
         self.start()
@@ -768,23 +774,50 @@ class RealtimeCapture:
     def _capture_frames(self):
         if self.disable:
             return None
+        
+        roi_coords = [
+            (6,3211,        48,74//2),   # ROI for the first digit, pos of top right corner then width/height
+            (6,3211+74//2,  48,74//2)       # ROI for the second digit, pos of top right corner then width/height
+        ]
         while self._running:
             ret, frame = self._cap.read()
             if ret:
+                # calculate FPS from frame interval
+                frame_time = datetime.now().timestamp()
+                if self._last_frame_time is not None:
+                    interval = frame_time - self._last_frame_time
+                    if interval > 0:
+                        fps = 1.0 / interval
+                        self._fps_window.append(fps)
+                        if len(self._fps_window) > 20:
+                            self._fps_window.pop(0)
+                self._last_frame_time = frame_time
+
+                # OCR timestamp reading
                 if self.ocr_timestamp:
                     # Get current computer time
                     comp_time = datetime.now()
                     comp_sec = comp_time.second
                     comp_ms = comp_time.microsecond // 1000
-
-                    # Extract ROI for seconds reading (region at (606,90) with size (76,51))
-                    roi = frame[90:90+51, 606:606+76]
-                    ocr_text = image_to_string(roi, config=self.ocr_config)
+                    
+                    #time_test = datetime.now().timestamp()
                     try:
-                        ocr_sec = int(''.join(filter(str.isdigit, ocr_text)))
+                        ocr = TemplateOCR(template_dir="ref_digits")
+                        ocr_sec, matching_scores, roi = ocr.read_number(frame, roi_coords)
+                        for score in matching_scores:
+                            if score < 0.7:
+                                print("Warning: Low matching score detected.")
+                                print("Detected number:", ocr_sec)
+                                print("Matching scores for each digit:", matching_scores)
+                                break
+                        cv2.imwrite("roi.png", roi)
                     except Exception:
                         ocr_sec = comp_sec
-                        print(f"Error: OCR failed to read seconds in '{ocr_text}'. Using computer time.")
+                        self._frame_ms_offset = 999
+                        print(f"Error: OCR failed to read seconds, saving image to 'roi.png'. Using computer time.")
+                        print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
+                        cv2.imwrite("roi.png", roi)
+                    #print(f"OCR time: {datetime.now().timestamp() - time_test}")
 
                     # Adjust minute if computer seconds is near 0 but OCR seconds is high
                     if comp_sec < 10 and ocr_sec >= 50:
@@ -792,28 +825,27 @@ class RealtimeCapture:
                         adjusted_hour = comp_time.hour if comp_time.minute > 0 else (comp_time.hour - 1) % 24
                         comp_time = comp_time.replace(hour=adjusted_hour, minute=(comp_time.minute - 1) % 60)
                     
-                    # Refine millisecond offset:
+                    # Set millisecond offset:
                     if self._prev_ocr_second is not None and self._prev_ocr_second != ocr_sec:
-                        # New second observed: update offset if current ms offset is smaller
-                        if self._frame_ms_offset is None or comp_ms < self._frame_ms_offset:
-                            self._frame_ms_offset = comp_ms
-                            self._offset_stable_count = 0
-                        else:
-                            self._offset_stable_count += 1
-                        if self._offset_stable_count == 20:
-                            print(f"Stable camera delay determined at: {comp_sec-ocr_sec}.{self._frame_ms_offset} seconds.")
-                    else:
-                        # Same second as previous frame: reset offset and counter
-                        self._prev_ocr_second = ocr_sec
+                        self._frame_ms_offset = comp_ms
+                    self._prev_ocr_second = ocr_sec
 
                     # Compose the final timestamp with refined ms offset and OCR seconds
-                    final_timestamp = comp_time.replace(second=ocr_sec, microsecond=(comp_ms-self._frame_ms_offset) * 1000)
-                    timestamp_str = final_timestamp.isoformat(timespec='milliseconds')
+                    try:
+                        #print(f"{comp_ms} and {self._frame_ms_offset} gives {comp_ms-self._frame_ms_offset}")
+                        final_timestamp = comp_time.replace(second=ocr_sec, microsecond=((comp_ms-self._frame_ms_offset)%1000 * 1000))
+                    except Exception:
+                        print(f"Error: Could not compose final timestamp with OCR seconds '{ocr_sec}' and ms offset '{self._frame_ms_offset}'. Saving image to 'roi.png'.")
+                        print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
+                        cv2.imwrite("roi.png", roi)
+                    timestamp = int(final_timestamp.timestamp()*1000)
 
+                # Store the frame etc
                 with self._frame_lock:
                     self._current_frame = frame
+                    self._current_fps = sum(self._fps_window) / len(self._fps_window)
                     if self.ocr_timestamp:
-                        self._current_timestamp = timestamp_str
+                        self._current_timestamp = timestamp
             else:
                 print("Error: Could not read from camera.")
                 self.stop()
@@ -821,13 +853,13 @@ class RealtimeCapture:
 
     def read(self):
         if self.disable:
-            return (True, None) if not self.ocr_timestamp else (True, None, datetime.now().timestamp() * 1000)
+            return (True, None, datetime.now().timestamp() * 1000)
         with self._frame_lock:
             if self._current_frame is None:
-                return (False, None) if not self.ocr_timestamp else (False, None, None)
+                return (False, None, None, None)
             if self.ocr_timestamp:
-                return (True, self._current_frame.copy(), self._current_timestamp)
-            return (True, self._current_frame.copy())
+                return (True, self._current_frame.copy(), self._current_timestamp, self._current_fps)
+            return (True, self._current_frame.copy(), datetime.now().timestamp() * 1000, self._current_fps)
 
     def __enter__(self):
         if self.disable:
@@ -838,6 +870,77 @@ class RealtimeCapture:
         if self.disable:
             return None
         self.stop()
+
+# Object to perform digit matching from an image using template matching
+class TemplateOCR:
+    def __init__(self, template_dir, threshold=100):
+        self.threshold = threshold
+        self.templates = {}
+        for d in range(10):
+            tmpl = cv2.imread(f"{template_dir}/roi{d}.png", cv2.IMREAD_GRAYSCALE)
+            if tmpl is None:
+                raise ValueError(f"Template for digit {d} not found in {template_dir}.")
+            # Binarize the template
+            _, tmpl_bin = cv2.threshold(tmpl, self.threshold, 255, cv2.THRESH_BINARY)
+            self.templates[str(d)] = tmpl_bin
+
+    def preprocess_image(self, img):
+        # Convert to grayscale if not already
+        if len(img.shape) == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, img_bin = cv2.threshold(img, self.threshold, 255, cv2.THRESH_BINARY)
+        return img_bin
+
+    def match_digit(self, roi):
+        """
+        Match a region of interest (ROI) against all digit templates.
+        
+        :param roi: The ROI containing the digit.
+        :return: A tuple of the best matching digit and its score.
+        """
+        best_digit = None
+        best_score = -1
+        for digit, tmpl in self.templates.items():
+            # Ensure the template fits within the ROI.
+            if roi.shape[0] < tmpl.shape[0] or roi.shape[1] < tmpl.shape[1]:
+                continue
+
+            # Slide the template over the ROI using normalized correlation.
+            res = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_digit = digit
+        return best_digit, best_score
+
+    def read_number(self, img, roi_coords):
+        """
+        Read a multi-digit number from an input image using specified ROIs.
+        
+        :param image: input image.
+        :param roi_coords: List of tuples, each defining the ROI for a digit in the format (top, left, height, width).
+        :return: A tuple containing the detected number (as a string), a list of matching scores, and a combined ROI.
+        """
+        detected_digits = []
+        scores = []
+        roi_images = []
+    
+        for roi in roi_coords:
+            top, left, height, width = roi
+            roi_img = img[top:top+height, left:left+width]
+            roi_img = self.preprocess_image(roi_img)
+            roi_images.append(roi_img)
+    
+            digit, score = self.match_digit(roi_img)
+            detected_digits.append(digit)
+            scores.append(score)
+    
+        if roi_images:
+            combined_roi = np.hstack(roi_images)
+        else:
+            combined_roi = np.array([])
+        detected_number = int(''.join(detected_digits))
+        return detected_number, scores, combined_roi
 
 def frame_corner_cutout(frame, cutout_size=0.2, absolute=True):
     if cutout_size <= 0 or cutout_size >= 0.5:
@@ -959,6 +1062,7 @@ class PressureSensorSystem:
                 
         except Exception as e:
             print(f"Error loading calibration: {str(e)}")
+            print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
             return False
     
     def convert_raw(self, sensor, sensor_value):
@@ -979,6 +1083,7 @@ class PressureSensorSystem:
         
         except Exception as e:
             print(f"Error converting raw pressure sensor value: {str(e)}")
+            print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
 
     def get_depth(self):
         if self.sensor_values["bottom"] is None or self.sensor_values["surface"] is None:
@@ -1034,6 +1139,7 @@ class DepthSharedMemory:
             return True
         except Exception as e:
             print(f"Error writing to shared memory: {e}")
+            print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
             self.shm = None  # Mark for reconnection attempt
             return False
 
@@ -1054,6 +1160,7 @@ class DepthSharedMemory:
             return depth_main, depth_sec, frame_pos, timestamp
         except Exception as e:
             print(f"Error reading from shared memory: {e}")
+            print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
             self.shm = None  # Mark for reconnection attempt
             return None, None, None, None
 
@@ -1063,6 +1170,7 @@ class DepthSharedMemory:
                 self.shm.close()
             except Exception as e:
                 print(f"Error closing shared memory: {e}")
+                print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
 
     def unlink(self):
         if self.shm is not None:
@@ -1070,6 +1178,7 @@ class DepthSharedMemory:
                 self.shm.unlink()
             except Exception as e:
                 print(f"Error unlinking shared memory: {e}")
+                print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
 
     def __enter__(self):
         return self
@@ -1124,6 +1233,7 @@ class PositionSharedMemory:
             return True
         except Exception as e:
             print(f"Error writing to position shared memory: {e}")
+            print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
             self.shm = None
             return False
 
@@ -1143,6 +1253,7 @@ class PositionSharedMemory:
             return data
         except Exception as e:
             print(f"Error reading from position shared memory: {e}")
+            print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
             self.shm = None
             return None
 
@@ -1152,6 +1263,7 @@ class PositionSharedMemory:
                 self.shm.close()
             except Exception as e:
                 print(f"Error closing position shared memory: {e}")
+                print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
 
     def unlink(self):
         if self.shm is not None:
@@ -1159,6 +1271,7 @@ class PositionSharedMemory:
                 self.shm.unlink()
             except Exception as e:
                 print(f"Error unlinking position shared memory: {e}")
+                print(f"Given error: {sys.exc_info()} at location: {sys.exc_info()[2].tb_lineno}")
 
     def __enter__(self):
         return self
