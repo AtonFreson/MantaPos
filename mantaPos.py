@@ -176,7 +176,7 @@ try:
                     for i, corner in enumerate(charuco_corners):
                         cv2.putText(frame, str(charuco_ids[i][0]), (int(corner[0][0]), int(corner[0][1])), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
 
-                if charuco_ids is not None and num_corners >= 4:
+                if charuco_ids is not None and num_corners >= 6:
                     # Estimate pose of the ChArUco board
                     success, rvec, tvec = cv2.aruco.estimatePoseCharucoBoard(
                         charucoCorners=charuco_corners,
@@ -234,6 +234,21 @@ try:
         
         ref_pos, ref_rot = manta.global_reference_pos(depth_main, depth_sec, frame_pos)
 
+        json_data = {
+            "mpu_unit": MPU_UNIT,
+            "packet_number": frame_number,
+            "camera": {
+                "timestamp": camera_timestamp,
+                "fps": camera_fps
+            }
+        }
+        if ref_pos is not None and ref_rot is not None:
+            json_data["global_pos"] = {
+                "timestamp": depth_timestamp,
+                "position": ref_pos.tolist(),
+                "rotation": ref_rot.tolist()
+            }
+        
         if success:
             # Calculate and display position and rotation
             if MARKER_TYPE[1] == "Single":
@@ -242,24 +257,12 @@ try:
                 position, rotation = manta.calculate_camera_position(tvec_list[0], rvec_list[0], markers_pos_rot[0])
                 manta.display_camera_position(frame, position, rotation, ref_pos, ref_rot, font_scale=2.5, thickness=3, rect_padding=(10,10,1900,350))
 
-            json_data = {
-                "mpu_unit": MPU_UNIT,
-                "packet_number": frame_number,
-                "camera": {
-                    "timestamp": camera_timestamp,
-                    "fps": camera_fps,
+                json_data["camera_pos"] = {
                     "position": position.tolist(),
                     "rotation": rotation.tolist()
                 }
-            }
-            if ref_pos is not None and ref_rot is not None:
-                json_data["global_pos"] = {
-                    "timestamp": depth_timestamp,
-                    "position": ref_pos.tolist(),
-                    "rotation": ref_rot.tolist()
-                }
-            frame_number += 1
-            position_shared.write_position(json.dumps(json_data))
+        position_shared.write_position(json.dumps(json_data))
+        frame_number += 1
 
         # Display the winch depth balancing reference
         manta.display_balance_bar(frame, depth_main, depth_sec, font_scale=3, thickness=8, bar_height=200)

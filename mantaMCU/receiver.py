@@ -183,25 +183,6 @@ def create_unit_lines(data_dict, unit_number):
     # Add unit name at the top
     lines.append(unit_names[unit_number].center(30))
     
-    if "camera" in data_dict:
-        cam = data_dict["camera"]
-        lines.append("Camera Data:")
-        lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
-        time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
-        position = cam["position"]
-        rotation = cam["rotation"]
-        
-        lines.append(f" Avg. FPS: {cam['fps']:.2f}")
-        lines.append(" Position:")
-        lines.append(f"  X=     {position[0]: >+6.3f}m")
-        lines.append(f"  Y=     {position[1]: >+6.3f}m")
-        lines.append(f"  Z=     {position[2]: >+6.3f}m")
-        lines.append(" Rotation:")
-        lines.append(f"  X=     {rotation[0]: >+6.3f} deg")
-        lines.append(f"  Y=     {rotation[1]: >+6.3f} deg")
-        lines.append(f"  Z=     {rotation[2]: >+6.3f} deg")
-        lines.append("")
-    
     if "global_pos" in data_dict:
         pos = data_dict["global_pos"]
         lines.append("Global Position Data:")
@@ -211,14 +192,38 @@ def create_unit_lines(data_dict, unit_number):
         rotation = pos["rotation"]
 
         lines.append(" Position:")
-        lines.append(f"  X=     {position[0]: >+6.3f}m")
-        lines.append(f"  Y=     {position[1]: >+6.3f}m")
-        lines.append(f"  Z=     {position[2]: >+6.3f}m")
+        lines.append(f"  X=     {position[0]: .5f}m")
+        lines.append(f"  Y=     {position[1]: .5f}m")
+        lines.append(f"  Z=     {position[2]: .5f}m")
         lines.append(" Rotation:")
-        lines.append(f"  X=     {rotation[0]: >+6.3f} deg")
-        lines.append(f"  Y=     {rotation[1]: >+6.3f} deg")
-        lines.append(f"  Z=     {rotation[2]: >+6.3f} deg")
+        lines.append(f"  X=     {rotation[0]: .5f} deg")
+        lines.append(f"  Y=     {rotation[1]: .5f} deg")
+        lines.append(f"  Z=     {rotation[2]: .5f} deg")
         lines.append("")
+
+    if "camera" in data_dict:
+        cam = data_dict["camera"]            
+        lines.append("Camera Data:")
+        lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
+        time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
+        lines.append(f" Avg. FPS: {cam['fps']:.2f}")
+
+        if "camera_pos" in data_dict:
+            position = data_dict["camera_pos"]["position"]
+            rotation = data_dict["camera_pos"]["rotation"]
+            lines.append(" Position:")
+            lines.append(f"  X=     {position[0]: .5f}m")
+            lines.append(f"  Y=     {position[1]: .5f}m")
+            lines.append(f"  Z=     {position[2]: .5f}m")
+            lines.append(" Rotation:")
+            lines.append(f"  X=     {rotation[0]: .5f} deg")
+            lines.append(f"  Y=     {rotation[1]: .5f} deg")
+            lines.append(f"  Z=     {rotation[2]: .5f} deg")
+        else:
+            for i in range(8): lines.append("")
+        lines.append("")
+    
+    if "global_pos" in data_dict:
         lines.append("")
 
     if "encoder" in data_dict:

@@ -636,9 +636,6 @@ def display_position_ChArUco(frame, tvec_list, rvec_list, marker_pos_rot, camera
 # Function to calculate the camera position and orientation in the global coordinate system
 def calculate_camera_position(tvec, rvec, marker_pos_rot):
     # Marker position and rotation in global coordinates
-    print(marker_pos_rot)
-    print(tvec)
-    print(rvec)
     marker_pos, marker_rot = marker_pos_rot
     x, y, z = marker_pos
     roll_deg, pitch_deg, yaw_deg = marker_rot
