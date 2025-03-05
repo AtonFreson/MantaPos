@@ -206,7 +206,10 @@ def create_unit_lines(data_dict, unit_number):
         lines.append("Camera Data:")
         lines.append(f"-- Time: {int(cam['timestamp'])/1000:.3f} --")
         time_diff = update_time_diff(cam['timestamp'], time_diff, unit_number)
-        lines.append(f" Avg. FPS: {cam['fps']:.2f}")
+        if cam['fps'] is not None:
+            lines.append(f" Avg. FPS: {cam['fps']:.2f}")
+        else:
+            lines.append(" Avg. FPS: Err(Camera disabled)")
 
         if "camera_pos" in data_dict:
             position = data_dict["camera_pos"]["position"]

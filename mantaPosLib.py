@@ -664,7 +664,7 @@ def calculate_camera_position(tvec, rvec, marker_pos_rot):
 
 # Function to display the position and orientation of the camera in the global coordinate system
 def display_camera_position(frame, position, rotation, ref_pos, ref_rot, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, 
-                            text_color=(0, 255, 0), thickness=1, alpha=0.5, rect_padding=(10, 10, 600, 150)):
+                            text_color=(0, 255, 0), thickness=1, alpha=0.65, rect_padding=(10, 10, 600, 150)):
     
     # Create a position text with fixed-width formatting to prevent text shifting
     position_text = (f"Pos: X={position[0]: >+6.3f}m, Y={position[1]: >+6.3f}m, Z={position[2]: >+6.3f}m")
@@ -850,10 +850,10 @@ class RealtimeCapture:
 
     def read(self):
         if self.disable:
-            return (True, None, datetime.now().timestamp() * 1000)
+            return (True, None, datetime.now().timestamp() * 1000, None)
         with self._frame_lock:
             if self._current_frame is None:
-                return (False, None, None, None)
+                return (False, None, datetime.now().timestamp() * 1000, None)
             if self.ocr_timestamp:
                 return (True, self._current_frame.copy(), self._current_timestamp, self._current_fps)
             return (True, self._current_frame.copy(), datetime.now().timestamp() * 1000, self._current_fps)
@@ -1023,9 +1023,9 @@ def global_reference_pos(z0, z1, frame_pos):
     frame_x_pos_offset = 0.196 # Minimum frame offset from the main depth sensor to the camera.
     #frame_z_pos_offset = 0.069 # Vertical frame offset from the main depth sensor to the camera.
 
-    camera_x_offset = -1.369 - 0.250 # Maximum zeroing offset of the camera from the center of the pool in the x-direction.
-    camera_y_offset = 1.45 - 0.04 # Offset of the camera from the center of the pool in the y-direction.
-    camera_z_offset = -0.1186 + 0.221 # Offset of the camera at the zeroing position at the top of the pool in the z-direction.
+    camera_x_offset = -1.369 - 0.170 # Maximum zeroing offset of the camera from the center of the pool in the x-direction.
+    camera_y_offset = 1.45 + 0.07 # Offset of the camera from the center of the pool in the y-direction.
+    camera_z_offset = -0.1186 + 0.225-0.187 # Offset of the camera at the zeroing position at the top of the pool in the z-direction.
     
     frame_pos = frame_pos + frame_x_pos_offset
     # Determine y position based on the frame position, where frame_pose makes up the hypotenuse of a right triangle.
