@@ -18,9 +18,9 @@ disable_camera = True  # Set to True to disable the camera and use test frames i
 enable_ocr_timestamp = False  # Set to True to enable OCR timestamp reading for precise camera timestamping
 
 # Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
-visualise_calib_dist = True
+visualise_calib_dist = False
 
-MARKER_TYPE = ["ChArUco", "Quad"]  # Select the marker type to use
+MARKER_TYPE = ["ChArUco", "Single"]  # Select the marker type to use
 # Options are "ChArUco" or "ArUco", and "Single" or "Quad" respectively
 
 # Quad marker positions in meters and order: 36, 37, 38, 39 & ArUco: b1, b2, b3, b4
@@ -32,22 +32,13 @@ new_camera_matrix = None
 # Set to True to enable position zeroing of markers based on camera position.
 enable_encoder_zeroing = False
 
+# Small helper function to flatten the data
 def reformat(data, type="corners"):
-    flattened_points = []
     if type == "corners":
-        for sublist in data:
-            if sublist is not None:
-                for point in sublist:
-                    flattened_points.append(point)
-    elif type == "ids":
-        valid_ids = [item for item in data if item is not None]
-        flattened_points = np.vstack(valid_ids) if valid_ids else None
-    elif type == "charuco_corners":
-        for sublist in data:
-            if sublist is not None:
-                flattened_points.append(sublist)
-        flattened_points = np.vstack(flattened_points) if flattened_points else None
-    return flattened_points
+        return [point for sublist in data if sublist is not None for point in sublist]
+    elif type == "ids" or type == "charuco_corners":
+        flattened_points = [item for item in data if item is not None]
+        return np.vstack(flattened_points) if flattened_points else None
 
 base_dict = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
 dictionary = cv2.aruco.Dictionary(1, base_dict.markerSize, base_dict.maxCorrectionBits)
@@ -103,23 +94,27 @@ elif MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Quad":
                        [QUAD_MARKER_POS[2][0] +corner_offset, QUAD_MARKER_POS[2][1] -corner_offset, MARKERS_Z_LEVEL],
                        [QUAD_MARKER_POS[3][0] +corner_offset, QUAD_MARKER_POS[3][1] +corner_offset, MARKERS_Z_LEVEL]]
     quad_marker_rot = [[0,0,180], [0,0,270], [0,0,90], [0,0,180]]
-
-    dictionaries = []
+    
+    # Set the bytesList directly
+    dictionary.bytesList = base_dict.bytesList[marker_numbers[0]:marker_numbers[3]+4]
+    
+    # Create separate boards with the same unified dictionary
     boards = []
     for i in range(4):
-        dictionary = cv2.aruco.Dictionary(1, base_dict.markerSize, base_dict.maxCorrectionBits)
-        dictionary.bytesList = base_dict.bytesList[marker_numbers[i]:marker_numbers[i]+4]
-        dictionaries.append(dictionary)
-        boards.append(cv2.aruco.CharucoBoard((squares_horizontally, squares_vertically), square_length, square_length*marker_ratio, 
-                                             dictionary))#, np.arange(marker_numbers[i], marker_numbers[i]+4, 1)))
+        board = cv2.aruco.CharucoBoard((squares_horizontally, squares_vertically), 
+                                       square_length, 
+                                       square_length*marker_ratio, 
+                                       dictionary)
+        boards.append(board)
+    
+    # Create a mapping from marker ID to board index
+    marker_to_board = {}
+    for i, marker_number in enumerate(marker_numbers):
+        for j in range(4):
+            marker_to_board[marker_number + j] = i
 
-# Define the detector(s)
-if MARKER_TYPE[1] == "Single":
-    detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
-else:
-    detectors = []
-    for i in range(4):
-        detectors.append(cv2.aruco.ArucoDetector(dictionaries[i], cv2.aruco.DetectorParameters()))
+# Define the detector
+detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
 
 # Initialize camera
 cap = manta.RealtimeCapture(CAMERA_RTSP_ADDR, disable_camera, enable_ocr_timestamp)
@@ -160,10 +155,9 @@ frame_pos_list = [0, 1.42882+0.00188, 2.70383+0.00188, 0]
 try:
     while True:
         success = False
-
+        
         # Capture camera frame
         ret, frame, camera_timestamp, camera_fps = cap.read()
-        #print(f"Camera FPS: {camera_fps:.2f}, Timestamp: {camera_timestamp}")
         if not ret:
             print("Error: Could not read from camera.")
             break
@@ -176,18 +170,34 @@ try:
 
         # Convert to grayscale
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # Detect ArUco markers
-        if MARKER_TYPE[1] == "Single":
-            corners, ids, rejected_img_points = detector.detectMarkers(gray_frame)
-        else:
-            corners_list = [None, None, None, None]
-            ids_list = [None, None, None, None]
-            rejected_img_points_list = [None, None, None, None]
-            for i in range(4):
-                corners_list[i], ids_list[i], rejected_img_points_list[i] = detectors[i].detectMarkers(gray_frame)
-            ids = reformat(ids_list, "ids")
         
+        # Detect ArUco markers
+        corners, ids, rejected_img_points = detector.detectMarkers(gray_frame)
+        if MARKER_TYPE[1] == "Quad":
+            # Sort detected markers into their respective boards
+            if ids is not None and len(ids) > 0:
+                corners_list = [[] for _ in range(4)]
+                ids_list = [[] for _ in range(4)]
+                
+                for i in range(len(ids)):
+                    marker_id = ids[i][0] + marker_numbers[0]
+                    if marker_id in marker_to_board:
+                        board_idx = marker_to_board[marker_id]
+                        corners_list[board_idx].append(corners[i])
+                        ids_list[board_idx].append([marker_id])
+                
+                # Convert to numpy arrays or None if empty
+                for i in range(4):
+                    if corners_list[i]:
+                        corners_list[i] = np.array(corners_list[i])
+                        ids_list[i] = np.array(ids_list[i])
+                    else:
+                        corners_list[i] = None
+                        ids_list[i] = None
+            else:
+                corners_list = [None, None, None, None]
+                ids_list = [None, None, None, None]
+                
         # Clear translation and rotation vectors
         tvec_list = [None, None, None, None]
         rvec_list = [None, None, None, None]
@@ -207,14 +217,15 @@ try:
                     )
                 else:
                     for i in range(4):
-                        # Refine detected markers for ChArUco boards
-                        detectors[i].refineDetectedMarkers(
-                            image=gray_frame,
-                            board=boards[i],
-                            detectedCorners=corners_list[i],
-                            detectedIds=ids_list[i],
-                            rejectedCorners=rejected_img_points_list[i]
-                        )
+                        if ids_list[i] is not None:
+                            # Use the unified detector for refinement
+                            detector.refineDetectedMarkers(
+                                image=gray_frame,
+                                board=boards[i],
+                                detectedCorners=corners_list[i],
+                                detectedIds=ids_list[i],
+                                rejectedCorners=rejected_img_points
+                            )
 
             # Modify the displayed markers to make them unreadable. Use: blur, cross, fill, diamond
             try:
@@ -248,12 +259,14 @@ try:
                     charuco_ids_list = [None, None, None, None]
                     for i in range(4):
                         if ids_list[i] is not None:
+                            ids_list[i] = ids_list[i] - marker_numbers[i]
                             num_corners_list[i], charuco_corners_list[i], charuco_ids_list[i] = cv2.aruco.interpolateCornersCharuco(
                                 markerCorners=corners_list[i],
                                 markerIds=ids_list[i],
                                 image=gray_frame,
                                 board=boards[i]
                             )
+                            ids_list[i] = ids_list[i] + marker_numbers[i]
 
                 # Draw ChArUco corners
                 if MARKER_TYPE[1] == "Single":
@@ -392,7 +405,7 @@ try:
                 # Display averaged position and rotation
                 if position and rotation:
                     manta.display_camera_position(frame, np.mean(position, axis=0), np.mean(rotation, axis=0), ref_pos, ref_rot, font_scale=2.5, thickness=6, rect_padding=(10,10,1900,350))
-            
+
         position_shared.write_position(json.dumps(json_data))
         frame_number += 1
 
@@ -402,7 +415,7 @@ try:
         # Display the camera preview with overlays
         manta.resize_window_with_aspect_ratio("Camera Preview with Position", frame) # Ensure this function exists
         cv2.imshow("Camera Preview with Position", frame)
-
+        
         # Check if the user wants to quit(esc) or take a snapshot(spacebar)
         key = cv2.waitKey(1)
         if key == 27:
@@ -444,7 +457,7 @@ try:
                     # Zero the position of the markers based on the camera position
                     single_board_pos, single_board_rot = manta.zero_marker_position(tvec_list[0], rvec_list[0], ref_pos, ref_rot)
                     print(f"Zeroed position: {single_board_pos}, rotation: {single_board_rot}")
-
+        
 except KeyboardInterrupt:
     print("User interrupted...")
 except Exception as e:
