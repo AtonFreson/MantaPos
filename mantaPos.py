@@ -13,20 +13,19 @@ import json
 # Initialize parameters
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
-camera_calibration_file = 'camera_calibration_4K-38_20-picked.npz'
+camera_calibration_file = 'camera_calibration_4K-38_20-picked.npz' # Choose either 38_20 or 52_20 for underwater. 38_20 seems more accurate.
 disable_camera = True  # Set to True to disable the camera and use test frames instead
 enable_ocr_timestamp = False  # Set to True to enable OCR timestamp reading for precise camera timestamping
 
 # Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
-visualise_calib_dist = False
+visualise_calib_dist = True
 
 MARKER_TYPE = ["ChArUco", "Single"]  # Select the marker type to use
 # Options are "ChArUco" or "ArUco", and "Single" or "Quad" respectively
 
-# Quad marker positions in meters and order: 36, 37, 38, 39 & ArUco: b1, b2, b3, b4
+# Quad marker positions in meters
 QUAD_MARKER_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
 MARKERS_Z_LEVEL = -0.3+0.1124  # Height of the markers in meters relative to origo
-
 new_camera_matrix = None
 
 # Set to True to enable position zeroing of markers based on camera position.
@@ -60,13 +59,13 @@ if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Single":
     height = (squares_vertically - 0) * square_length
     center_offset = square_length / 4 # Offset center due to hole placement
 
-    single_board_pos = [-width/2  +center_offset, -height/2 +center_offset, MARKERS_Z_LEVEL]#[0,0,0]  # Position of the marker in meters
-    single_board_rot = [0,0,0]  # Euler rotation of the marker in degrees, origin is normal around z
+    single_board_pos = [-width/2  +center_offset, +height/2 -center_offset, MARKERS_Z_LEVEL]#[0,0,0]  # Position of the marker in meters
+    single_board_rot = [0,0,270]  # Euler rotation of the marker in degrees, origin is normal around z
     
 elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Single":
     # Large ArUco marker settings
     marker_length = 1.000 # in meters
-    marker_number = 3  # Marker number to use
+    marker_number = 1  # Marker number to use
 
     # Precompute board center offset to center the coordinate system
     single_marker_pos = [-marker_length/2, -marker_length/2, MARKERS_Z_LEVEL]  # Offset position of the marker in meters
@@ -86,14 +85,17 @@ elif MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Quad":
     squares_horizontally = squares_vertically
     marker_ratio = 0.75
     square_length = 0.500/squares_vertically # Real world length of each square in meters
+    corner_offset = square_length*squares_vertically/2
     marker_numbers = [18, 22, 26, 30] # Marker numbers to use in the quad ChArUco boards, number then 3 next
 
-    corner_offset = square_length*squares_vertically/2
-    quad_marker_pos = [[QUAD_MARKER_POS[0][0] +corner_offset, QUAD_MARKER_POS[0][1] +corner_offset, MARKERS_Z_LEVEL],
-                       [QUAD_MARKER_POS[1][0] -corner_offset, QUAD_MARKER_POS[1][1] +corner_offset, MARKERS_Z_LEVEL], 
-                       [QUAD_MARKER_POS[2][0] +corner_offset, QUAD_MARKER_POS[2][1] -corner_offset, MARKERS_Z_LEVEL],
-                       [QUAD_MARKER_POS[3][0] +corner_offset, QUAD_MARKER_POS[3][1] +corner_offset, MARKERS_Z_LEVEL]]
-    quad_marker_rot = [[0,0,180], [0,0,270], [0,0,90], [0,0,180]]
+    quad_order = [3, 0, 1, 2]
+    quad_marker_pos = [
+        [QUAD_MARKER_POS[quad_order[0]][0] + corner_offset, QUAD_MARKER_POS[quad_order[0]][1] - corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[1]][0] + corner_offset, QUAD_MARKER_POS[quad_order[1]][1] + corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[2]][0] - corner_offset, QUAD_MARKER_POS[quad_order[2]][1] - corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[3]][0] + corner_offset, QUAD_MARKER_POS[quad_order[3]][1] - corner_offset, MARKERS_Z_LEVEL]
+    ]
+    quad_marker_rot = [[0,0,90], [0,0,180], [0,0,0], [0,0,90]]
     
     # Set the bytesList directly
     dictionary.bytesList = base_dict.bytesList[marker_numbers[0]:marker_numbers[3]+4]
@@ -101,17 +103,37 @@ elif MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Quad":
     # Create separate boards with the same unified dictionary
     boards = []
     for i in range(4):
-        board = cv2.aruco.CharucoBoard((squares_horizontally, squares_vertically), 
-                                       square_length, 
-                                       square_length*marker_ratio, 
-                                       dictionary)
-        boards.append(board)
+        boards.append(cv2.aruco.CharucoBoard((squares_horizontally, squares_vertically), square_length, square_length*marker_ratio, dictionary))
     
     # Create a mapping from marker ID to board index
     marker_to_board = {}
     for i, marker_number in enumerate(marker_numbers):
         for j in range(4):
             marker_to_board[marker_number + j] = i
+
+elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Quad":
+    # Quad ArUco marker settings
+    marker_length = 0.500
+    marker_numbers = [2, 3, 4, 5]  # Marker numbers to use in the quad ArUco markers
+
+    quad_order = [0, 1, 2, 3]
+    quad_marker_pos = [
+        [QUAD_MARKER_POS[quad_order[0]][0], QUAD_MARKER_POS[quad_order[0]][1], MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[1]][0], QUAD_MARKER_POS[quad_order[1]][1], MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[2]][0], QUAD_MARKER_POS[quad_order[2]][1], MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[3]][0], QUAD_MARKER_POS[quad_order[3]][1], MARKERS_Z_LEVEL]
+    ]
+    quad_marker_rot = [[0,0,0], [0,0,0], [0,0,0], [0,0,0]]
+
+    object_points_list = []
+    for i in range(4):
+        object_points_list.append(np.array([[0, 0, 0], 
+                                            [marker_length, 0, 0], 
+                                            [marker_length, marker_length, 0], 
+                                            [0, marker_length, 0]], dtype=np.float32))
+
+    # Set the bytesList directly
+    dictionary.bytesList = base_dict.bytesList[marker_numbers[0]:marker_numbers[3]+1]
 
 # Define the detector
 detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
@@ -145,12 +167,15 @@ snapnr = 1
 
 
 
-#depth_main_list = [3.29482, 3.29482, 3.29482, 3.29482, 3.29482, 4.56092, 4.56092, 4.56092, 4.56092, 7.01261, 7.01261, 7.01261]
-#depth_sec_list = [3.28974, 3.28974, 3.28974, 3.28974, 3.28974, 4.55399, 4.55399, 4.55399, 4.55399, 7.00989, 7.00989, 7.00989]
-#frame_pos_list = [2.70515, 2.70515, 2.70515, 2.70515/2, 0.0, 0.0, 0.0, 2.70515/2, 2.70515, 0.0, 2.70515/2, 2.70515]
+#depth_main_list = [0, 3.29482, 3.29482, 3.29482, 3.29482, 3.29482, 4.56092, 4.56092, 4.56092, 4.56092, 7.01261, 7.01261, 7.01261]
+#depth_sec_list = [0, 3.28974, 3.28974, 3.28974, 3.28974, 3.28974, 4.55399, 4.55399, 4.55399, 4.55399, 7.00989, 7.00989, 7.00989]
+#frame_pos_list = [0, 2.70515, 2.70515, 2.70515, 2.70515/2, 0.0, 0.0, 0.0, 2.70515/2, 2.70515, 0.0, 2.70515/2, 2.70515]
 depth_main_list = [0, 4.00778, 4.00778, 4.00781]
 depth_sec_list = [0, 4.00824, 4.00824, 4.00824]
 frame_pos_list = [0, 1.42882+0.00188, 2.70383+0.00188, 0]
+
+
+
 # Main loop
 try:
     while True:
@@ -173,7 +198,7 @@ try:
         
         # Detect ArUco markers
         corners, ids, rejected_img_points = detector.detectMarkers(gray_frame)
-        if MARKER_TYPE[1] == "Quad":
+        if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Quad":
             # Sort detected markers into their respective boards
             if ids is not None and len(ids) > 0:
                 corners_list = [[] for _ in range(4)]
@@ -229,21 +254,21 @@ try:
 
             # Modify the displayed markers to make them unreadable. Use: blur, cross, fill, diamond
             try:
-                if MARKER_TYPE[1] == "Single":
-                    frame = manta.censor_marker(frame, corners, "diamond")
-                else:
+                if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Quad":
                     frame = manta.censor_marker(frame, reformat(corners_list, "corners"), "diamond")
+                else:
+                    frame = manta.censor_marker(frame, corners, "diamond")
                 #frame = manta.censor_charuco_board(frame, charuco_corners, corners, 0.5)
             except:
                 pass
 
             # Draw detected markers
-            if MARKER_TYPE[1] == "Single":
-                cv2.aruco.drawDetectedMarkers(frame, corners, ids)
-            else:
+            if MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Quad":
                 cv2.aruco.drawDetectedMarkers(frame, reformat(corners_list, "corners"), reformat(ids_list, "ids"))
+            else:
+                cv2.aruco.drawDetectedMarkers(frame, corners, ids)
 
-            # Single ChArUco board detection
+            # ChArUco board detection
             if MARKER_TYPE[0] == "ChArUco":
                 # Interpolate ChArUco corners
                 if MARKER_TYPE[1] == "Single":
@@ -330,21 +355,29 @@ try:
                                 # Draw axes of the board
                                 cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, rvec, tvec, square_length*squares_vertically/2, 10)
 
-            # Single ArUco marker detection
-            elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Single":
-                # Loop through all detected markers
-                for i in range(len(ids)):
-                    # Get image points for the detected marker corners
-                    image_points = corners[i][0]
-
-                    # Solve PnP for each detected marker
-                    success, rvec, tvec = cv2.solvePnP(object_points, image_points, camera_matrix, dist_coeffs)
+            # ArUco marker detection
+            elif MARKER_TYPE[0] == "ArUco":
+                if MARKER_TYPE[1] == "Single":
+                    # Solve PnP for the detected marker
+                    success, rvec, tvec = cv2.solvePnP(object_points, corners[0][0], camera_matrix, dist_coeffs)
 
                     if success:
                         # Store translation and rotation vectors
-                        tvec_list.append(tvec.flatten())
-                        rvec_list.append(rvec.flatten())
-                        markers_pos_rot.append([single_marker_pos, single_marker_rot])
+                        tvec_list[0] = tvec.flatten()
+                        rvec_list[0] = rvec.flatten()
+                        markers_pos_rot[0] = [single_marker_pos, single_marker_rot]
+                else:
+                    # Loop through all detected markers
+                    for i in range(4):
+                        if ids[i] is not None:
+                            # Solve PnP for each detected marker
+                            success, rvec, tvec = cv2.solvePnP(object_points_list[ids[i][0]], corners[i][0], camera_matrix, dist_coeffs)
+
+                            if success:
+                                # Store translation and rotation vectors
+                                tvec_list[ids[i][0]] = tvec.flatten()
+                                rvec_list[ids[i][0]] = rvec.flatten()
+                                markers_pos_rot[ids[i][0]] = [quad_marker_pos[i], quad_marker_rot[i]]
 
         # Display the undistorted camera feed if selected, based on the calibration data
         if visualise_calib_dist:

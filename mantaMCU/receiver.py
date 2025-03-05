@@ -98,7 +98,7 @@ AVG_DEPTH_LENGTH = 30  # Number of depth values to average per list
 # Positions for data displays (left side)
 DATA_START_X = 10
 DATA_START_Y = 20
-DATA_SPACING_X = 370
+DATA_SPACING_X = 380
 DATA_ROW_Y = 30
 SPACER_WIDTH = 5 # Width of the white vertical spacer lines
 
@@ -150,7 +150,7 @@ INFO_BOX_X2 = FILENAME_BOX_X1 + 355
 INFO_BOX_Y2 = INFO_BOX_Y1 + 70 + 27*len(unit_names)
 
 # Constants for image dimensions
-IMG_WIDTH = CHECKBOX_START_X + 370
+IMG_WIDTH = CHECKBOX_START_X + DATA_SPACING_X
 IMG_HEIGHT = 990
 
 # Initialize shared data lists for UDP and position data
@@ -191,14 +191,10 @@ def create_unit_lines(data_dict, unit_number):
         position = pos["position"]
         rotation = pos["rotation"]
 
-        lines.append(" Position:")
-        lines.append(f"  X=     {position[0]: .5f}m")
-        lines.append(f"  Y=     {position[1]: .5f}m")
-        lines.append(f"  Z=     {position[2]: .5f}m")
-        lines.append(" Rotation:")
-        lines.append(f"  X=     {rotation[0]: .5f} deg")
-        lines.append(f"  Y=     {rotation[1]: .5f} deg")
-        lines.append(f"  Z=     {rotation[2]: .5f} deg")
+        lines.append(" Pos:   X        Y       Z")
+        lines.append(f"     {position[0]: .4f} {position[1]: .4f} {position[2]: .4f}")
+        lines.append(" Rot:   X        Y       Z")
+        lines.append(f"     {rotation[0]: .3f}  {rotation[1]: .3f}  {rotation[2]: .3f}")
         lines.append("")
 
     if "camera" in data_dict:
@@ -231,7 +227,7 @@ def create_unit_lines(data_dict, unit_number):
         lines.append("")
     
     if "global_pos" in data_dict:
-        for i in range(2): lines.append("")
+        for i in range(7): lines.append("")
 
     if "encoder" in data_dict:
         enc = data_dict["encoder"]

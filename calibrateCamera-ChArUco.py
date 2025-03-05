@@ -22,10 +22,11 @@ marker_ratio = 0.7 # Marker ratio of square_length to fit within white squares; 
 square_length = 0.3689/squares_horizontally #0.2975/6 * square_pixels/200 # Real world length of square in meters
 
 # Generate and display the marker grid
-board, dictionary = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
+board = genMarker.create_and_save_ChArUco_board(square_length, square_pixels, grid_edge, marker_ratio, squares_vertically, squares_horizontally)
 if not use_existing_images: manta.display_marker_grid(board_type="ChArUco")
 
 # Define the detector and parameters
+dictionary = cv2.aruco.getPredefinedDictionary(genMarker.ARUCO_DICT)
 params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(dictionary, params)
 
@@ -113,7 +114,7 @@ def load_images_and_detect_ChArUco(directory_path, total_snapshots_used=30, min_
 
 if use_existing_images:
     print("Using existing images for calibration.")
-    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir, 1206, 20)
+    all_charuco_corners, all_charuco_ids, gray_frame = load_images_and_detect_ChArUco(snapshot_dir, 1206, 12)
 else:
     # Start capturing camera frames
     next_snapshot_time = time.time() + 0.5  # First snapshot in 500ms
