@@ -1186,7 +1186,7 @@ class DepthSharedMemory:
 # Class to handle shared memory for camera position/rotation data, to send json strings.
 class PositionSharedMemory:
     SHM_NAME = "mantaPos_position"
-    SIZE = 512  # bytes
+    SIZE = 1024  # bytes
 
     def __init__(self, create=False):
         self.create = create

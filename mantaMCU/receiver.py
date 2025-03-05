@@ -211,23 +211,27 @@ def create_unit_lines(data_dict, unit_number):
         else:
             lines.append(" Avg. FPS: Err(Camera disabled)")
 
-        if "camera_pos" in data_dict:
-            position = data_dict["camera_pos"]["position"]
-            rotation = data_dict["camera_pos"]["rotation"]
-            lines.append(" Position:")
-            lines.append(f"  X=     {position[0]: .5f}m")
-            lines.append(f"  Y=     {position[1]: .5f}m")
-            lines.append(f"  Z=     {position[2]: .5f}m")
-            lines.append(" Rotation:")
-            lines.append(f"  X=     {rotation[0]: .5f} deg")
-            lines.append(f"  Y=     {rotation[1]: .5f} deg")
-            lines.append(f"  Z=     {rotation[2]: .5f} deg")
+        if any(key in data_dict for key in ["camera_pos_0", "camera_pos_1", "camera_pos_2", "camera_pos_3"]):
+            lines.append(" Pos:    X        Y       Z")
+            for i in range(4):
+                if f"camera_pos_{i}" in data_dict:
+                    position = data_dict[f"camera_pos_{i}"]["position"]
+                    lines.append(f"  {i}: {position[0]: .4f} {position[1]: .4f} {position[2]: .4f}")
+                else:
+                    lines.append(f"  {i}:")
+            lines.append(" Rot:    X        Y       Z")
+            for i in range(4):
+                if f"camera_pos_{i}" in data_dict:
+                    rotation = data_dict[f"camera_pos_{i}"]["rotation"]
+                    lines.append(f"  {i}: {rotation[0]: .3f}  {rotation[1]: .3f}  {rotation[2]: .3f}")
+                else:
+                    lines.append(f"  {i}:")
         else:
-            for i in range(8): lines.append("")
+            for i in range(10): lines.append("")
         lines.append("")
     
     if "global_pos" in data_dict:
-        lines.append("")
+        for i in range(2): lines.append("")
 
     if "encoder" in data_dict:
         enc = data_dict["encoder"]
@@ -329,7 +333,7 @@ def create_unit_lines(data_dict, unit_number):
     if data_dict != {}:
         # Fit data for unit 4
         if unit_number == 4:
-            lines = lines[:-12*(2 if "global_pos" in data_dict else 1)]
+            lines = lines[:-14*(2 if "global_pos" in data_dict else 1)]
 
         if "ptp" not in data_dict:
             lines.append("Clock Info:")
