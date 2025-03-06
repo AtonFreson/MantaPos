@@ -14,11 +14,11 @@ import json
 MPU_UNIT = 4  # MPU unit number for recording the camera position/rotation data
 CAMERA_RTSP_ADDR = "rtsp://admin:@169.254.178.11:554/" # Overwrites CAMERA_INPUT if 4K selected
 camera_calibration_file = 'camera_calibration_4K-38_20-picked.npz' # Choose either 38_20 or 52_20 for underwater. 38_20 seems more accurate.
-disable_camera = True  # Set to True to disable the camera and use test frames instead
-enable_ocr_timestamp = False  # Set to True to enable OCR timestamp reading for precise camera timestamping
+disable_camera = False  # Set to True to disable the camera and use test frames instead
+enable_ocr_timestamp = True  # Set to True to enable OCR timestamp reading for precise camera timestamping
 
 # Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
-visualise_calib_dist = True
+visualise_calib_dist = False
 
 MARKER_TYPE = ["ChArUco", "Single"]  # Select the marker type to use
 # Options are "ChArUco" or "ArUco", and "Single" or "Quad" respectively

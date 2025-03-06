@@ -1023,8 +1023,8 @@ def global_reference_pos(z0, z1, frame_pos):
     frame_y_pos_offset = 0.196 # Minimum frame offset from the main depth sensor to the camera.
     #frame_z_pos_offset = 0.069 # Vertical frame offset from the main depth sensor to the camera.
 
-    camera_x_offset = 1.45 + 0.07 # Offset of the camera from the center of the pool in the x-direction.
-    camera_y_offset = 1.369 + 0.170 # Maximum zeroing offset of the camera from the center of the pool in the y-direction.
+    camera_x_offset = 1.5406 # Offset of the camera from the center of the pool in the x-direction.
+    camera_y_offset = 1.3757 # Maximum zeroing offset of the camera from the center of the pool in the y-direction.
     camera_z_offset = -0.1186 + 0.225-0.187 # Offset of the camera at the zeroing position at the top of the pool in the z-direction.
     
     frame_pos = frame_pos + frame_y_pos_offset
