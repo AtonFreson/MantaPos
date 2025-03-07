@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 
 # Configuration
-DATA_FILE = 'recordings/ChArUco Single 4.5m run1.json'
-display_only_avg = True
+DATA_FILE = 'recordings/ArUco Quad 4.5m run3.json'
+display_only_avg = False
 
 def load_and_extract_data(file_path):
     """Load data from JSON and extract the required position data."""
@@ -48,6 +48,8 @@ def load_and_extract_data(file_path):
             avg_value = []
             timestamp = None
             if 'camera_pos_0' in item and 'position' in item['camera_pos_0']:
+                if item['camera_pos_0']['position'][0] < 1:
+                    continue
                 camera_pos_0_data.append({
                     'timestamp': item['camera'].get('timestamp', 0),
                     'position': item['camera_pos_0']['position']
@@ -56,6 +58,8 @@ def load_and_extract_data(file_path):
                 timestamp = item['camera'].get('timestamp', 0)
             
             if 'camera_pos_1' in item and 'position' in item['camera_pos_1']:
+                if item['camera_pos_1']['position'][0] < 1:
+                    continue
                 camera_pos_1_data.append({
                     'timestamp': item['camera'].get('timestamp', 0),
                     'position': item['camera_pos_1']['position']
@@ -64,6 +68,8 @@ def load_and_extract_data(file_path):
                 timestamp = item['camera'].get('timestamp', 0)
             
             if 'camera_pos_2' in item and 'position' in item['camera_pos_2']:
+                if item['camera_pos_2']['position'][0] < 1:
+                    continue
                 camera_pos_2_data.append({
                     'timestamp': item['camera'].get('timestamp', 0),
                     'position': item['camera_pos_2']['position']
@@ -72,6 +78,8 @@ def load_and_extract_data(file_path):
                 timestamp = item['camera'].get('timestamp', 0)
             
             if 'camera_pos_3' in item and 'position' in item['camera_pos_3']:
+                if item['camera_pos_3']['position'][0] < 1:
+                    continue
                 camera_pos_3_data.append({
                     'timestamp': item['camera'].get('timestamp', 0),
                     'position': item['camera_pos_3']['position']
@@ -110,6 +118,22 @@ def extract_position_arrays(data_list):
             z.append(position[2])
     
     return x, y, z
+
+def set_axes_equal(ax):
+    """Set equal scaling for a 3D plot."""
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
+    x_range = abs(x_limits[1] - x_limits[0])
+    y_range = abs(y_limits[1] - y_limits[0])
+    z_range = abs(z_limits[1] - z_limits[0])
+    max_range = max(x_range, y_range, z_range)
+    x_mid = np.mean(x_limits)
+    y_mid = np.mean(y_limits)
+    z_mid = np.mean(z_limits)
+    ax.set_xlim3d([x_mid - max_range/2, x_mid + max_range/2])
+    ax.set_ylim3d([y_mid - max_range/2, y_mid + max_range/2])
+    ax.set_zlim3d([z_mid - max_range/2, z_mid + max_range/2])
 
 def visualize_3d_positions(pressure_depth_data, global_pos_data, camera_pos_0_data, 
                           camera_pos_1_data, camera_pos_2_data, camera_pos_3_data, avg_camera_pos_data):
@@ -184,6 +208,7 @@ def visualize_3d_positions(pressure_depth_data, global_pos_data, camera_pos_0_da
     
     # Set the default view
     ax.view_init(elev=30, azim=-60)
+    set_axes_equal(ax)
     
     # Show the plot (interactive)
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])  # Adjust layout to accommodate the text

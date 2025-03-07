@@ -20,7 +20,7 @@ enable_ocr_timestamp = True  # Set to True to enable OCR timestamp reading for p
 # Set to True to visualise the frame distortion based on the camera calibration. High computational cost (~110ms).
 visualise_calib_dist = False
 
-MARKER_TYPE = ["ChArUco", "Single"]  # Select the marker type to use
+MARKER_TYPE = ["ArUco", "Quad"]  # Select the marker type to use
 # Options are "ChArUco" or "ArUco", and "Single" or "Quad" respectively
 
 # Quad marker positions in meters
@@ -114,16 +114,17 @@ elif MARKER_TYPE[0] == "ChArUco" and MARKER_TYPE[1] == "Quad":
 elif MARKER_TYPE[0] == "ArUco" and MARKER_TYPE[1] == "Quad":
     # Quad ArUco marker settings
     marker_length = 0.500
+    corner_offset = marker_length/2
     marker_numbers = [2, 3, 4, 5]  # Marker numbers to use in the quad ArUco markers
 
-    quad_order = [0, 1, 2, 3]
+    quad_order = [0, 3, 2, 1]
     quad_marker_pos = [
-        [QUAD_MARKER_POS[quad_order[0]][0], QUAD_MARKER_POS[quad_order[0]][1], MARKERS_Z_LEVEL],
-        [QUAD_MARKER_POS[quad_order[1]][0], QUAD_MARKER_POS[quad_order[1]][1], MARKERS_Z_LEVEL],
-        [QUAD_MARKER_POS[quad_order[2]][0], QUAD_MARKER_POS[quad_order[2]][1], MARKERS_Z_LEVEL],
-        [QUAD_MARKER_POS[quad_order[3]][0], QUAD_MARKER_POS[quad_order[3]][1], MARKERS_Z_LEVEL]
+        [QUAD_MARKER_POS[quad_order[0]][0] + corner_offset, QUAD_MARKER_POS[quad_order[0]][1] + corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[1]][0] + corner_offset, QUAD_MARKER_POS[quad_order[1]][1] + corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[2]][0] + corner_offset, QUAD_MARKER_POS[quad_order[2]][1] + corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[3]][0] + corner_offset, QUAD_MARKER_POS[quad_order[3]][1] + corner_offset, MARKERS_Z_LEVEL]
     ]
-    quad_marker_rot = [[0,0,0], [0,0,0], [0,0,0], [0,0,0]]
+    quad_marker_rot = [[0,0,180], [0,0,180], [0,0,180], [0,0,180]]
 
     object_points_list = []
     for i in range(4):
@@ -368,7 +369,7 @@ try:
                         markers_pos_rot[0] = [single_marker_pos, single_marker_rot]
                 else:
                     # Loop through all detected markers
-                    for i in range(4):
+                    for i in range(len(ids)):
                         if ids[i] is not None:
                             # Solve PnP for each detected marker
                             success, rvec, tvec = cv2.solvePnP(object_points_list[ids[i][0]], corners[i][0], camera_matrix, dist_coeffs)
@@ -377,7 +378,7 @@ try:
                                 # Store translation and rotation vectors
                                 tvec_list[ids[i][0]] = tvec.flatten()
                                 rvec_list[ids[i][0]] = rvec.flatten()
-                                markers_pos_rot[ids[i][0]] = [quad_marker_pos[i], quad_marker_rot[i]]
+                                markers_pos_rot[ids[i][0]] = [quad_marker_pos[ids[i][0]], quad_marker_rot[ids[i][0]]]
 
         # Display the undistorted camera feed if selected, based on the calibration data
         if visualise_calib_dist:
