@@ -41,69 +41,73 @@ RANDOM_STATE = 42
 
 def load_and_prepare_data(file_path):
     """Load data from JSON, align by time, and prepare it for modeling."""
-    try:
-        with open(file_path, 'r') as f:
-            data = [json.loads(line) for line in f]
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Error: File not found at {file_path}")
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Error decoding JSON in file '{file_path}': {e}")
-
-    depth_data = []
-    pressure_data = []
-    
-    for item in data:
-        if item.get('mpu_unit') == 1 and 'encoder' in item and 'distance' in item['encoder']:
-            depth_data.append({'timestamp': item['encoder']['timestamp'], 'distance': item['encoder']['distance']})
-        
-        if item.get('mpu_unit') == 0 and 'pressure' in item and sensor1_name in item['pressure'] and sensor2_name in item['pressure']:
-            pressure_data.append({
-                'timestamp': item['pressure']['timestamp'],
-                'sensor1': item['pressure'][sensor1_name],
-                'sensor2': item['pressure'][sensor2_name],
-            })
-    if not depth_data or not pressure_data:
-        raise ValueError("No valid sensor or depth data found in the JSON file")
-        
-    # Convert to Pandas DataFrame
-    depth_df = pd.DataFrame(depth_data)
-    pressure_df = pd.DataFrame(pressure_data)
-
-    # Sort data by timestamp
-    depth_df = depth_df.sort_values('timestamp').reset_index(drop=True)
-    pressure_df = pressure_df.sort_values('timestamp').reset_index(drop=True)
-    
-    # Get values for interpolation
-    depth_x = depth_df['timestamp'].values
-    depth_y = depth_df['distance'].values
-    pressure_x = pressure_df['timestamp'].values
-    pressure_sensor_1 = pressure_df['sensor1'].values
-    pressure_sensor_2 = pressure_df['sensor2'].values
-    
-    if len(np.unique(depth_x)) < 2:
-        raise ValueError("Not enough unique timestamps in the depth data for interpolation.")
-
-    # Identify valid timestamps within the depth range
-    valid_mask = (pressure_x >= depth_x.min()) & (pressure_x <= depth_x.max())
-
-    # Filter pressure data to only those within the depth range
-    pressure_x = pressure_x[valid_mask]
-    pressure_sensor_1 = pressure_sensor_1[valid_mask]
-    pressure_sensor_2 = pressure_sensor_2[valid_mask]
-
-    if len(pressure_x) == 0:
-        raise ValueError("No pressure data falls within the depth timestamp range; nothing to interpolate.")
-    
-    # Interpolate depth
-    if len(depth_x) > 1:
-        interp_func = interp1d(depth_x, depth_y, bounds_error=True)
+    def align_data(file_path):
+        """Align encoder and pressure data by timestamp."""
         try:
-            interpolated_depths = interp_func(pressure_x)
-        except ValueError as e:
-            raise ValueError(f"Error interpolating depth data: {e}")
-    else:
-        raise ValueError("Not enough unique timestamps in the encoder data for interpolation.")
-    
+            with open(file_path, 'r') as f:
+                data = [json.loads(line) for line in f]
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Error: File not found at {file_path}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error decoding JSON in file '{file_path}': {e}")
+
+        depth_data = []
+        pressure_data = []
+        
+        for item in data:
+            if item.get('mpu_unit') == 1 and 'encoder' in item and 'distance' in item['encoder']:
+                depth_data.append({'timestamp': item['encoder']['timestamp'], 'distance': item['encoder']['distance']})
+            
+            if item.get('mpu_unit') == 0 and 'pressure' in item and sensor1_name in item['pressure'] and sensor2_name in item['pressure']:
+                pressure_data.append({
+                    'timestamp': item['pressure']['timestamp'],
+                    'sensor1': item['pressure'][sensor1_name],
+                    'sensor2': item['pressure'][sensor2_name],
+                })
+        if not depth_data or not pressure_data:
+            raise ValueError("No valid sensor or depth data found in the JSON file")
+            
+        # Convert to Pandas DataFrame
+        depth_df = pd.DataFrame(depth_data)
+        pressure_df = pd.DataFrame(pressure_data)
+
+        # Sort data by timestamp
+        depth_df = depth_df.sort_values('timestamp').reset_index(drop=True)
+        pressure_df = pressure_df.sort_values('timestamp').reset_index(drop=True)
+        
+        # Get values for interpolation
+        depth_x = depth_df['timestamp'].values
+        depth_y = depth_df['distance'].values
+        pressure_x = pressure_df['timestamp'].values
+        pressure_sensor_1 = pressure_df['sensor1'].values
+        pressure_sensor_2 = pressure_df['sensor2'].values
+        
+        if len(np.unique(depth_x)) < 2:
+            raise ValueError("Not enough unique timestamps in the depth data for interpolation.")
+
+        # Identify valid timestamps within the depth range
+        valid_mask = (pressure_x >= depth_x.min()) & (pressure_x <= depth_x.max())
+
+        # Filter pressure data to only those within the depth range
+        pressure_x = pressure_x[valid_mask]
+        pressure_sensor_1 = pressure_sensor_1[valid_mask]
+        pressure_sensor_2 = pressure_sensor_2[valid_mask]
+
+        if len(pressure_x) == 0:
+            raise ValueError("No pressure data falls within the depth timestamp range; nothing to interpolate.")
+        
+        # Interpolate depth
+        if len(depth_x) > 1:
+            interp_func = interp1d(depth_x, depth_y, bounds_error=True)
+            try:
+                interpolated_depths = interp_func(pressure_x)
+            except ValueError as e:
+                raise ValueError(f"Error interpolating depth data: {e}")
+        else:
+            raise ValueError("Not enough unique timestamps in the encoder data for interpolation.")
+        
+        return interpolated_depths, pressure_sensor_1, pressure_sensor_2
+        
     # Helper function to filter sensor data
     def filter_sensor(depth_vals, sensor_vals):
         window_size = 0.01
@@ -149,6 +153,10 @@ def load_and_prepare_data(file_path):
             current += window_size
         removed_pass3_idx = np.array(removed_pass3_idx)
         return good_mask, removed_pass2_idx, removed_pass3_idx
+
+
+    # Align data and filter sensor data
+    interpolated_depths, pressure_sensor_1, pressure_sensor_2 = align_data(file_path)
 
     # Filter sensor data for sensor 1
     sensor1_mask, r2_idx1, r3_idx1 = filter_sensor(interpolated_depths, pressure_sensor_1)
