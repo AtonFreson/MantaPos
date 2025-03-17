@@ -4,8 +4,10 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 
 # Configuration
-DATA_FILE = 'recordings/ArUco Quad 4.5m run3.json'
+DATA_DIRECTORY = 'recordings'
+DATA_FILE = 'ArUco Single 7-4.5m'
 display_only_avg = False
+display_gradient = False
 
 def load_and_extract_data(file_path):
     """Load data from JSON and extract the required position data."""
@@ -20,10 +22,7 @@ def load_and_extract_data(file_path):
     # Initialize lists to store different types of position data
     pressure_depth_data = []  # mpu_unit 0 - pressure - depth0 and depth1
     global_pos_data = []      # mpu_unit 4 - global_pos - position
-    camera_pos_0_data = []    # mpu_unit 4 - camera_pos_0 - position
-    camera_pos_1_data = []    # mpu_unit 4 - camera_pos_1 - position
-    camera_pos_2_data = []    # mpu_unit 4 - camera_pos_2 - position
-    camera_pos_3_data = []    # mpu_unit 4 - camera_pos_3 - position
+    camera_pos_data = [[], [], [], []]  # mpu_unit 4 - camera_pos_X - position
     camera_avg_data = []      # Average of all available camera positions 
     
     # Extract data points
@@ -47,46 +46,17 @@ def load_and_extract_data(file_path):
                 })
             avg_value = []
             timestamp = None
-            if 'camera_pos_0' in item and 'position' in item['camera_pos_0']:
-                if item['camera_pos_0']['position'][0] < 1:
-                    continue
-                camera_pos_0_data.append({
-                    'timestamp': item['camera'].get('timestamp', 0),
-                    'position': item['camera_pos_0']['position']
-                })
-                avg_value.append(item['camera_pos_0']['position'])
-                timestamp = item['camera'].get('timestamp', 0)
-            
-            if 'camera_pos_1' in item and 'position' in item['camera_pos_1']:
-                if item['camera_pos_1']['position'][0] < 1:
-                    continue
-                camera_pos_1_data.append({
-                    'timestamp': item['camera'].get('timestamp', 0),
-                    'position': item['camera_pos_1']['position']
-                })
-                avg_value.append(item['camera_pos_1']['position'])
-                timestamp = item['camera'].get('timestamp', 0)
-            
-            if 'camera_pos_2' in item and 'position' in item['camera_pos_2']:
-                if item['camera_pos_2']['position'][0] < 1:
-                    continue
-                camera_pos_2_data.append({
-                    'timestamp': item['camera'].get('timestamp', 0),
-                    'position': item['camera_pos_2']['position']
-                })
-                avg_value.append(item['camera_pos_2']['position'])
-                timestamp = item['camera'].get('timestamp', 0)
-            
-            if 'camera_pos_3' in item and 'position' in item['camera_pos_3']:
-                if item['camera_pos_3']['position'][0] < 1:
-                    continue
-                camera_pos_3_data.append({
-                    'timestamp': item['camera'].get('timestamp', 0),
-                    'position': item['camera_pos_3']['position']
-                })
-                avg_value.append(item['camera_pos_3']['position'])
-                timestamp = item['camera'].get('timestamp', 0)
-            
+            for camera_name in ['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3']:
+                if camera_name in item and 'position' in item[camera_name]:
+                    if item[camera_name]['position'][0] < 1 or item[camera_name]['position'][0] > 2:
+                        continue
+                    camera_pos_data[int(camera_name[-1])].append({
+                        'timestamp': item['camera'].get('timestamp', 0),
+                        'position': item[camera_name]['position']
+                    })
+                    avg_value.append(item[camera_name]['position'])
+                    timestamp = item['camera'].get('timestamp', 0)
+                
             if avg_value and timestamp:
                 camera_avg_data.append({
                     'timestamp': timestamp,
@@ -94,12 +64,10 @@ def load_and_extract_data(file_path):
                 })
     
     # Check if data was found
-    if not any([pressure_depth_data, global_pos_data, camera_pos_0_data, 
-                camera_pos_1_data, camera_pos_2_data, camera_pos_3_data]):
+    if not any([pressure_depth_data, global_pos_data, *camera_pos_data, camera_avg_data]):
         raise ValueError("No valid position data found in the JSON file")
         
-    return (pressure_depth_data, global_pos_data, camera_pos_0_data, 
-            camera_pos_1_data, camera_pos_2_data, camera_pos_3_data, camera_avg_data)
+    return (pressure_depth_data, global_pos_data, *camera_pos_data, camera_avg_data)
 
 def extract_position_arrays(data_list):
     """Extract x, y, z arrays from a list of position data."""
@@ -163,7 +131,7 @@ def visualize_3d_positions(pressure_depth_data, global_pos_data, camera_pos_0_da
         ax.scatter(global_x, global_y, global_z, c='red', marker='^', label='Global Position', s=30)
         ax.plot(global_x, global_y, global_z, c='red', alpha=0.5)
     
-    # Plot camera position data in blue (all cameras)
+    # Plot camera position data with blue-to-green gradient
     for cam_x, cam_y, cam_z, cam_num in [
         (camera_0_x, camera_0_y, camera_0_z, 0),
         (camera_1_x, camera_1_y, camera_1_z, 1),
@@ -171,13 +139,41 @@ def visualize_3d_positions(pressure_depth_data, global_pos_data, camera_pos_0_da
         (camera_3_x, camera_3_y, camera_3_z, 3)
     ]:
         if cam_x:
-            ax.scatter(cam_x, cam_y, cam_z, c='blue', marker='s', label=f'Camera {cam_num}' if cam_num == 0 else "", s=20)
-            ax.plot(cam_x, cam_y, cam_z, c='blue', alpha=0.3)
+            # Create color gradient from blue to green
+            n_points = len(cam_x)
+            if n_points > 0:
+                if display_gradient:    
+                    # Generate colors from blue to green
+                    colors = plt.cm.winter(np.linspace(0, 1, n_points))
+                    # Plot each point with its corresponding color in the gradient
+                    for i in range(n_points):
+                        ax.scatter(cam_x[i], cam_y[i], cam_z[i], c=[colors[i]], marker='s', s=20)
+                else:
+                    ax.scatter(cam_x, cam_y, cam_z, c='blue', marker='s', label=f'Camera {cam_num}', s=20)
+
+                # Add a single representative point for the legend
+                ax.scatter([], [], [], c='blue', marker='s', label=f'Camera {cam_num}' if cam_num == 0 else "", s=20)
+                
+                # Plot the connecting line
+                ax.plot(cam_x, cam_y, cam_z, color='gray', alpha=0.3)
     
     # Plot average camera positions in purple
     if avg_camera_x:
-        ax.scatter(avg_camera_x, avg_camera_y, avg_camera_z, c='purple', marker='*', label='Avg Camera', s=50)
-        ax.plot(avg_camera_x, avg_camera_y, avg_camera_z, c='purple', alpha=0.7)
+        # Create color gradient for average camera positions
+        n_points = len(avg_camera_x)
+        if n_points > 0:
+            if display_gradient:
+                colors = plt.cm.winter(np.linspace(0, 1, n_points))
+                for i in range(n_points):
+                    ax.scatter(avg_camera_x[i], avg_camera_y[i], avg_camera_z[i], c=[colors[i]], marker='*', s=50)
+            else:
+                ax.scatter(avg_camera_x, avg_camera_y, avg_camera_z, c='purple', marker='*', label='Avg Camera', s=50)
+
+            # Add a single representative point for the legend
+            ax.scatter([], [], [], c='purple', marker='*', label='Avg Camera', s=50)
+            
+            # Plot the connecting line
+            ax.plot(avg_camera_x, avg_camera_y, avg_camera_z, color='gray', alpha=0.7)
     
     # Add labels and title
     ax.set_xlabel('X')
@@ -216,11 +212,12 @@ def visualize_3d_positions(pressure_depth_data, global_pos_data, camera_pos_0_da
 
 if __name__ == "__main__":
     try:
-        print(f"Loading data from {DATA_FILE}...")
+        data_file = f"{DATA_DIRECTORY}/{DATA_FILE}.json"
+        print(f"Loading data from {data_file}...")
         
         # Load and extract the data
         (pressure_depth_data, global_pos_data, camera_pos_0_data, 
-         camera_pos_1_data, camera_pos_2_data, camera_pos_3_data, camera_avg_data) = load_and_extract_data(DATA_FILE)
+         camera_pos_1_data, camera_pos_2_data, camera_pos_3_data, camera_avg_data) = load_and_extract_data(data_file)
         
         # Print summary of loaded data
         print(f"Loaded {len(pressure_depth_data)} pressure depth points")
