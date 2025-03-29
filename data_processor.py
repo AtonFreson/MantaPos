@@ -5,6 +5,7 @@ from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from collections import defaultdict
 import os
+import pprint
 
 class DataProcessor:
     """
@@ -160,6 +161,16 @@ class DataProcessor:
                     else:
                         sensor_type = top_key
                         sensor_data = self._ensure_dict_in_extracted_data(sensor_type, mpu_unit)
+
+                        # if 'sensor_type' is camera_pos_*, get time from the camera
+                        if sensor_type.startswith('camera_pos_'):
+                            # Use the camera's timestamp for this sensor group
+                            if 'camera' in item and 'timestamp' in item['camera']:
+                                if 'timestamp' not in sensor_data: sensor_data['timestamp'] = []
+                                sensor_data['timestamp'].append(item['camera']['timestamp'])
+                            else:
+                                print(f"Warning: Camera position data missing timestamp in record: {item}")
+                                continue
 
                         # Append all key-value pairs from the dictionary
                         for subkey, subvalue in top_value.items():
@@ -443,32 +454,49 @@ class DataProcessor:
         return self.aligned_data
 
     def export_to_pandas(self):
-        """Export aligned data to pandas DataFrame."""
-        if not self.aligned_data:
-            raise ValueError("No aligned data available. Call align_data() first.")
-        if 'reference' not in self.aligned_data or 'timestamps' not in self.aligned_data['reference']:
-             raise ValueError("Aligned data is missing reference timestamps.")
+        """Export data to pandas DataFrame."""
+        if not self.aligned_data or 'reference' not in self.aligned_data or 'timestamps' not in self.aligned_data['reference']:
+            print("Warning: Aligned data not available, exporting raw extracted data if available.")
+            data_source = self.extracted_data
+        else:
+            data_source = self.aligned_data
 
+        df_dict = {}
+        if 'reference' in data_source and 'timestamps' in data_source['reference']:
+            df_dict['timestamp'] = data_source['reference']['timestamps']
+        else:
+            # Try to find timestamp(s) from any sensor group
+            found_ts = False
+            for mpu_key, mpu_data in data_source.items():
+                if mpu_key == 'reference':
+                    continue
+                for sensor_type, sensor_data in mpu_data.items():
+                    if 'timestamp' in sensor_data:
+                        df_dict['timestamp'] = sensor_data['timestamp']
+                        found_ts = True
+                        break
+                if found_ts:
+                    break
+            if 'timestamp' not in df_dict:
+                raise ValueError("No timestamp data available for export.")
 
-        # Create a dictionary for the DataFrame
-        df_dict = {'timestamp': self.aligned_data['reference']['timestamps']}
-
-        # Add all aligned data fields
-        for mpu_number, mpu_data in self.aligned_data.items():
-            if mpu_number == 'reference':
+        for key, value in data_source.items():
+            if key == 'reference':
                 continue
-
-            for sensor_type, sensor_data in mpu_data.items():
+            for sensor_type, sensor_data in value.items():
                 for field_name, field_values in sensor_data.items():
-                    # Create a descriptive column name
-                    column_name = f"mpu{mpu_number}_{sensor_type}_{field_name}"
-                    # Handle potential duplicate column names if needed, though unlikely with this naming
+                    if field_name == 'timestamp':
+                        continue
+                    column_name = f"{key}_{sensor_type}_{field_name}" if key.startswith("mpu") else f"{sensor_type}_{field_name}"
                     if column_name in df_dict:
                          print(f"Warning: Duplicate column name generated: {column_name}. Overwriting.")
                     df_dict[column_name] = field_values
 
-        # Create DataFrame
         try:
+             # Flatten multi-dimensional arrays to avoid DataFrame errors
+             for name, value in df_dict.items():
+                 if isinstance(value, np.ndarray) and (value.ndim > 1):
+                     df_dict[name] = list(value)
              df = pd.DataFrame(df_dict)
              return df
         except ValueError as e:
@@ -477,6 +505,48 @@ class DataProcessor:
                   print(f"  Column '{name}': Length {len(data)}")
              raise ValueError(f"Could not create DataFrame: {e}")
 
+    def print_data(self, sensor_types=None, mpu_units=None, num_rows=10):
+        # Print a preview of the data in a DataFrame format.
+ 
+        try:
+            df = self.export_to_pandas()
+        except Exception as e:
+            print(f"Error exporting data to DataFrame for printing: {e}")
+            return
+
+        # Filter columns based on sensor_types and mpu_units if specified
+        cols_to_show = ['timestamp']
+        available_mpus = [mpu for mpu in self.aligned_data.keys() if mpu != 'reference'] if self.aligned_data else [mpu for mpu in self.extracted_data.keys()]
+        show_mpus = mpu_units if mpu_units is not None else available_mpus
+
+        all_sensors = set()
+        for mpu in show_mpus:
+             if (self.aligned_data and mpu in self.aligned_data) or (not self.aligned_data and mpu in self.extracted_data):
+                 if self.aligned_data:
+                     all_sensors.update(self.aligned_data[mpu].keys())
+                 else:
+                     all_sensors.update(self.extracted_data[mpu].keys())
+        show_sensors = sensor_types if sensor_types is not None else list(all_sensors)
+
+        for mpu in show_mpus:
+            for sensor in show_sensors:
+                data_source = self.aligned_data if self.aligned_data else self.extracted_data
+                if mpu in data_source and sensor in data_source[mpu]:
+                    for field in data_source[mpu][sensor].keys():
+                         col_name = f"mpu{mpu}_{sensor}_{field}"
+                         if col_name in df.columns:
+                              cols_to_show.append(col_name)
+
+        if len(cols_to_show) > 1:
+            with pd.option_context('display.max_rows', num_rows,
+                                    'display.max_columns', None,
+                                    'display.width', 1000):
+                                    print(df[cols_to_show].head(num_rows))
+        else:
+            print("No columns match the specified filters.")
+
+        print(f"\nShowing first {min(num_rows, len(df))} rows.")
+        print(f"Total rows: {len(df)}, Total columns in full exported data: {len(df.columns)}")
 
     def visualize(self, sensor_types=None, mpu_units=None, fields=None, figsize=(15, 5), sharex=True):
         """
@@ -489,150 +559,159 @@ class DataProcessor:
         - figsize: Figure size (width, height) per subplot in inches.
         - sharex: Whether subplots should share the x-axis (default: True).
         """
-        if not self.aligned_data:
-            raise ValueError("No aligned data available. Call align_data() first.")
+        # If aligned data exists, use it; otherwise, fallback to extracted data.
+        if self.aligned_data and 'reference' in self.aligned_data and 'timestamps' in self.aligned_data['reference']:
+            # Reference timestamps (use copy to avoid modifying original)
+            timestamps = self.aligned_data['reference']['timestamps'].copy()
+            # Optional: Convert timestamps for plotting if they are large numbers (e.g., ms to s)
+            # timestamps_plot = (timestamps - timestamps[0]) / 1000.0 # Example: relative time in seconds if timestamps are ms
+            timestamps_plot = timestamps # Use original for now
 
-        # Reference timestamps (use copy to avoid modifying original)
-        timestamps = self.aligned_data['reference']['timestamps'].copy()
-        # Optional: Convert timestamps for plotting if they are large numbers (e.g., ms to s)
-        # timestamps_plot = (timestamps - timestamps[0]) / 1000.0 # Example: relative time in seconds if timestamps are ms
-        timestamps_plot = timestamps # Use original for now
+            # Determine which MPUs, sensors, and fields to plot
+            target_mpus = set()
+            target_sensors = set()
+            all_plot_items = [] # List of (mpu, sensor, field, data) tuples
 
-        # Determine which MPUs, sensors, and fields to plot
-        target_mpus = set()
-        target_sensors = set()
-        all_plot_items = [] # List of (mpu, sensor, field, data) tuples
+            available_mpus = [mpu for mpu in self.aligned_data.keys() if mpu != 'reference']
+            plot_mpus = mpu_units if mpu_units is not None else available_mpus
 
-        available_mpus = [mpu for mpu in self.aligned_data.keys() if mpu != 'reference']
-        plot_mpus = mpu_units if mpu_units is not None else available_mpus
-
-        for mpu in plot_mpus:
-            if mpu not in self.aligned_data:
-                print(f"Warning: MPU {mpu} not found in aligned data.")
-                continue
-            target_mpus.add(mpu)
-            available_sensors = self.aligned_data[mpu].keys()
-            plot_sensors = sensor_types if sensor_types is not None else available_sensors
-
-            for sensor in plot_sensors:
-                if sensor not in self.aligned_data[mpu]:
-                    # print(f"Warning: Sensor {sensor} not found for MPU {mpu} in aligned data.")
+            for mpu in plot_mpus:
+                if mpu not in self.aligned_data:
+                    print(f"Warning: MPU {mpu} not found in aligned data.")
                     continue
-                target_sensors.add(sensor)
-                available_fields = self.aligned_data[mpu][sensor].keys()
-                plot_fields = fields if fields is not None else available_fields
+                target_mpus.add(mpu)
+                available_sensors = self.aligned_data[mpu].keys()
+                plot_sensors = sensor_types if sensor_types is not None else available_sensors
 
-                for field in plot_fields:
-                    if field not in self.aligned_data[mpu][sensor]:
-                         # print(f"Warning: Field {field} not found for MPU {mpu}, Sensor {sensor}.")
+                for sensor in plot_sensors:
+                    if sensor not in self.aligned_data[mpu]:
+                        # print(f"Warning: Sensor {sensor} not found for MPU {mpu} in aligned data.")
+                        continue
+                    target_sensors.add(sensor)
+                    available_fields = self.aligned_data[mpu][sensor].keys()
+                    plot_fields = fields if fields is not None else available_fields
+
+                    for field in plot_fields:
+                        if field not in self.aligned_data[mpu][sensor]:
+                             # print(f"Warning: Field {field} not found for MPU {mpu}, Sensor {sensor}.")
+                             continue
+
+                        field_data = self.aligned_data[mpu][sensor][field]
+                        # Ensure data has same length as timestamps
+                        if len(field_data) == len(timestamps_plot):
+                             all_plot_items.append((mpu, sensor, field, field_data))
+                        else:
+                             print(f"Warning: Skipping plot for mpu{mpu}_{sensor}_{field}. Length mismatch (Data: {len(field_data)}, Timestamps: {len(timestamps_plot)}).")
+
+
+            if not all_plot_items:
+                print("No data found to plot based on the specified filters.")
+                return
+
+            # Group items by field name for plotting on separate axes
+            plots_by_field = defaultdict(list)
+            for mpu, sensor, field, data in all_plot_items:
+                 plots_by_field[field].append({'mpu': mpu, 'sensor': sensor, 'data': data})
+
+            num_plots = len(plots_by_field)
+            if num_plots == 0:
+                print("No valid fields to plot.")
+                return
+
+            # Create figure and axes
+            fig, axes = plt.subplots(num_plots, 1, figsize=(figsize[0], figsize[1] * num_plots), sharex=sharex)
+            if num_plots == 1: # Make axes subscriptable even if only one plot
+                axes = [axes]
+
+            # Plot data
+            ax_idx = 0
+            for field_name, plot_list in plots_by_field.items():
+                 ax = axes[ax_idx]
+                 for plot_item in plot_list:
+                     mpu = plot_item['mpu']
+                     sensor = plot_item['sensor']
+                     data = plot_item['data']
+                     label = f"MPU {mpu} ({sensor})"
+                     ax.plot(timestamps_plot, data, label=label, marker='.', markersize=2, linestyle='-') # Small markers + line
+
+                 ax.set_title(f"Field: {field_name}")
+                 ax.set_ylabel("Value")
+                 ax.legend()
+                 ax.grid(True)
+                 ax_idx += 1
+
+            # Common X label
+            if sharex:
+                 axes[-1].set_xlabel("Timestamp") # Or "Time (s)" if converted
+            else:
+                 for ax in axes:
+                      ax.set_xlabel("Timestamp")
+
+
+            plt.suptitle(f"Aligned Sensor Data (Ref: MPU {self.aligned_data['reference']['mpu']} {self.aligned_data['reference']['sensor']})", fontsize=16)#, y=1.02) # Adjust y position
+            plt.tight_layout(rect=[0, 0.03, 1, 0.98]) # Adjust layout to prevent title overlap
+            plt.show()
+        else:
+             print("Aligned data not available. Using extracted data for visualization. Data might not be synchronized.")
+             all_plot_items = []  # Each item: (mpu_key, sensor, field, timestamps, y_data)
+             available_mpus = list(self.extracted_data.keys())
+             # Use provided mpu_units if given, adapting number to key format if needed.
+             plot_mpus = []
+             if mpu_units is not None:
+                 for m in mpu_units:
+                     key = f"mpu{m}" if f"mpu{m}" in self.extracted_data else m
+                     plot_mpus.append(key)
+             else:
+                 plot_mpus = available_mpus
+
+             for mpu_key in plot_mpus:
+                 if mpu_key not in self.extracted_data:
+                     print(f"Warning: MPU {mpu_key} not found in extracted data.")
+                     continue
+                 mpu_data = self.extracted_data[mpu_key]
+                 sensors = sensor_types if sensor_types is not None else mpu_data.keys()
+                 for sensor in sensors:
+                     if sensor not in mpu_data:
                          continue
+                     sensor_data = mpu_data[sensor]
+                     if 'timestamp' not in sensor_data:
+                         print(f"Warning: Sensor {sensor} in {mpu_key} has no timestamp.")
+                         continue
+                     timestamps = sensor_data['timestamp']
+                     for field in (fields if fields is not None else sensor_data.keys()):
+                         if field == 'timestamp' or field not in sensor_data:
+                             continue
+                         y_data = sensor_data[field]
+                         if len(y_data) != len(timestamps):
+                             print(f"Warning: Length mismatch in {mpu_key}.{sensor}.{field}. Skipping.")
+                             continue
+                         all_plot_items.append((mpu_key, sensor, field, timestamps, y_data))
+             if not all_plot_items:
+                 print("No data to plot based on the specified filters in extracted data.")
+                 return
 
-                    field_data = self.aligned_data[mpu][sensor][field]
-                    # Ensure data has same length as timestamps
-                    if len(field_data) == len(timestamps_plot):
-                         all_plot_items.append((mpu, sensor, field, field_data))
-                    else:
-                         print(f"Warning: Skipping plot for mpu{mpu}_{sensor}_{field}. Length mismatch (Data: {len(field_data)}, Timestamps: {len(timestamps_plot)}).")
-
-
-        if not all_plot_items:
-            print("No data found to plot based on the specified filters.")
-            return
-
-        # Group items by field name for plotting on separate axes
-        plots_by_field = defaultdict(list)
-        for mpu, sensor, field, data in all_plot_items:
-             plots_by_field[field].append({'mpu': mpu, 'sensor': sensor, 'data': data})
-
-        num_plots = len(plots_by_field)
-        if num_plots == 0:
-            print("No valid fields to plot.")
-            return
-
-        # Create figure and axes
-        fig, axes = plt.subplots(num_plots, 1, figsize=(figsize[0], figsize[1] * num_plots), sharex=sharex)
-        if num_plots == 1: # Make axes subscriptable even if only one plot
-            axes = [axes]
-
-        # Plot data
-        ax_idx = 0
-        for field_name, plot_list in plots_by_field.items():
-             ax = axes[ax_idx]
-             for plot_item in plot_list:
-                 mpu = plot_item['mpu']
-                 sensor = plot_item['sensor']
-                 data = plot_item['data']
-                 label = f"MPU {mpu} ({sensor})"
-                 ax.plot(timestamps_plot, data, label=label, marker='.', markersize=2, linestyle='-') # Small markers + line
-
-             ax.set_title(f"Field: {field_name}")
-             ax.set_ylabel("Value")
-             ax.legend()
-             ax.grid(True)
-             ax_idx += 1
-
-        # Common X label
-        if sharex:
-             axes[-1].set_xlabel("Timestamp") # Or "Time (s)" if converted
-        else:
-             for ax in axes:
-                  ax.set_xlabel("Timestamp")
-
-
-        plt.suptitle(f"Aligned Sensor Data (Ref: MPU {self.aligned_data['reference']['mpu']} {self.aligned_data['reference']['sensor']})", fontsize=16)#, y=1.02) # Adjust y position
-        plt.tight_layout(rect=[0, 0.03, 1, 0.98]) # Adjust layout to prevent title overlap
-        plt.show()
-
-    def print_aligned_data(self, sensor_types=None, mpu_units=None, num_rows=10):
-        """Print a preview of the aligned data DataFrame to the console."""
-        if not self.aligned_data:
-            print("No aligned data available. Call align_data() first.")
-            return
-
-        try:
-            df = self.export_to_pandas()
-        except Exception as e:
-            print(f"Error exporting data to DataFrame for printing: {e}")
-            return
-
-        # Filter columns based on sensor_types and mpu_units if specified
-        cols_to_show = ['timestamp']
-        available_mpus = [mpu for mpu in self.aligned_data.keys() if mpu != 'reference']
-        show_mpus = mpu_units if mpu_units is not None else available_mpus
-
-        all_sensors = set()
-        for mpu in show_mpus:
-             if mpu in self.aligned_data:
-                 all_sensors.update(self.aligned_data[mpu].keys())
-        show_sensors = sensor_types if sensor_types is not None else list(all_sensors)
-
-        for mpu in show_mpus:
-            for sensor in show_sensors:
-                if mpu in self.aligned_data and sensor in self.aligned_data[mpu]:
-                    for field in self.aligned_data[mpu][sensor].keys():
-                         col_name = f"mpu{mpu}_{sensor}_{field}"
-                         if col_name in df.columns:
-                              cols_to_show.append(col_name)
-
-        # Print the head of the filtered DataFrame
-        if len(cols_to_show) > 1:
-            with pd.option_context('display.max_rows', num_rows,
-                                    'display.max_columns', None, # Show all selected columns
-                                    'display.width', 1000): # Adjust width for wider output
-                                    print(df[cols_to_show].head(num_rows))
-        else:
-            print("No columns match the specified filters.")
-
-        print(f"\nShowing first {min(num_rows, len(df))} rows.")
-        print(f"Total rows: {len(df)}, Total columns in full aligned data: {len(df.columns)}")
-
+             num_plots = len(all_plot_items)
+             fig, axes = plt.subplots(num_plots, 1, figsize=(figsize[0], figsize[1]*num_plots), sharex=sharex)
+             if num_plots == 1:
+                 axes = [axes]
+             for ax, (mpu_key, sensor, field, timestamps, y_data) in zip(axes, all_plot_items):
+                 ax.plot(timestamps, y_data, marker='.', markersize=2, linestyle='-',
+                         label=f"{mpu_key} ({sensor}) - {field}")
+                 ax.set_title(f"{mpu_key}.{sensor}.{field}")
+                 ax.set_ylabel("Value")
+                 ax.legend()
+                 ax.grid(True)
+             axes[-1].set_xlabel("Timestamp")
+             plt.tight_layout()
+             plt.show()
 
 # --- Example Usage ---
 if __name__ == "__main__":
-    dummy_file_path = "recordings/ArUco Quad 4.5-7m.json"
-    # Copy the content from the user prompt into the dummy file
+    #dummy_file_name = "data_handling_test"
+    dummy_file_name = "ChArUco Single 4.5m run2"
     
     # --- Run the Processor ---
+    dummy_file_path = "recordings/" + dummy_file_name + ".json"
     processor = DataProcessor(dummy_file_path)
     processor.load_data()
 
@@ -640,17 +719,16 @@ if __name__ == "__main__":
     print("\n--- Available Data Types ---")
     data_types = processor.extract_data_types()
     # Use pprint for better readability of nested structures
-    import pprint
     pprint.pprint(data_types)
 
     extracted = processor.extract_all_data()
 
-    print("\n--- Aligning Data ---")
-    aligned_data = processor.align_data(reference_sensor='encoder', reference_mpu=1)
+    #print("\n--- Aligning Data ---")
+    #aligned_data = processor.align_data(reference_sensor='encoder', reference_mpu=1)
 
     # Print preview of aligned data
-    print("\n--- Aligned Data Preview ---")
-    processor.print_aligned_data(sensor_types=['pressure', 'acceleration'], mpu_units=[0, 1], num_rows=5)
+    print("\n--- Data Preview ---")
+    processor.print_data(sensor_types=['acceleration', 'camera_pos_0'], mpu_units=[0, 1, 4], num_rows=5)
 
     # Visualize specific aligned data
     # Plot acceleration (x, y, z) from MPU 0 and pressure depth0 from MPU 0 & 3
@@ -658,5 +736,4 @@ if __name__ == "__main__":
     processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
     processor.visualize(mpu_units=[0], sensor_types=['gyroscope'], fields=['x', 'y', 'z'])
     processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0'])
-    # Visualize temperature from all MPUs that have it
-    processor.visualize(sensor_types=['temperature'])
+    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0'], fields=['position', 'rotation'])
