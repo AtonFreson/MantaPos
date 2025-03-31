@@ -774,7 +774,7 @@ class RealtimeCapture:
         
         roi_coords = [
             (6,3211,        48,74//2),   # ROI for the first digit, pos of top right corner then width/height
-            (6,3211+74//2,  48,74//2)       # ROI for the second digit, pos of top right corner then width/height
+            (6,3211+74//2,  48,74//2)    # ROI for the second digit, pos of top right corner then width/height
         ]
         while self._running:
             ret, frame = self._cap.read()

@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import os
 import pprint
+import datetime
 
 class DataProcessor:
     """
@@ -49,11 +50,11 @@ class DataProcessor:
             except Exception:
                 pass # Ignore errors trying to find the line
             if error_line > 0:
-                 raise ValueError(f"Error decoding JSON in file '{self.file_path}' at line {error_line}: {e}")
+                raise ValueError(f"Error decoding JSON in file '{self.file_path}' at line {error_line}: {e}")
             else:
-                 raise ValueError(f"Error decoding JSON in file '{self.file_path}': {e}")
+                raise ValueError(f"Error decoding JSON in file '{self.file_path}': {e}")
         except Exception as e: # Catch other potential file reading errors
-             raise IOError(f"Error reading file '{self.file_path}': {e}")
+            raise IOError(f"Error reading file '{self.file_path}': {e}")
 
 
     def extract_data_types(self):
@@ -65,11 +66,30 @@ class DataProcessor:
             raise ValueError("No data loaded. Call load_data() first.")
 
         data_types = defaultdict(int)
+        difference1 = []
+        difference2 = []
+        time_step = []
+        last_camera_timestamp = 0
 
         # Analyze the structure of the JSON data
         for item in self.data:
             mpu_unit = item.get('mpu_unit', 'N/A')
             prefix = f"mpu{mpu_unit}." if mpu_unit != 'N/A' else ""
+            
+            # Printing the unit 4 time differences for debugging
+            if mpu_unit == 4:
+                recv_time = item.get('recv_time')
+                recv_time = int(datetime.datetime.fromisoformat(recv_time).timestamp() * 1000) # Convert to milliseconds timestamp
+
+                time_step.append(item['camera']['timestamp'] - last_camera_timestamp)
+                if time_step[-1] < 0:
+                    item['camera']['timestamp'] += 1000
+                    last_camera_timestamp = item['camera']['timestamp']//1000 * 1000
+                else:
+                    last_camera_timestamp = item['camera']['timestamp']
+
+                difference1.append(recv_time-item['global_pos']['timestamp'])
+                difference2.append(recv_time-item['camera']['timestamp'])
 
             for key, value in item.items():
                 if key in ['mpu_unit', 'recv_time', 'packet_number']:
@@ -78,26 +98,32 @@ class DataProcessor:
                     if key == 'imu': # Special handling for nested IMU
                          if 'acceleration' in value and isinstance(value['acceleration'], dict):
                              for subkey in value['acceleration'].keys():
-                                 data_types[f"{prefix}imu.acceleration.{subkey}"] += 1
+                                data_types[f"{prefix}imu.acceleration.{subkey}"] += 1
                          if 'gyroscope' in value and isinstance(value['gyroscope'], dict):
                               for subkey in value['gyroscope'].keys():
-                                 data_types[f"{prefix}imu.gyroscope.{subkey}"] += 1
+                                data_types[f"{prefix}imu.gyroscope.{subkey}"] += 1
                          # Add timestamp if present
                          if 'timestamp' in value:
-                             data_types[f"{prefix}imu.timestamp"] += 1
+                            data_types[f"{prefix}imu.timestamp"] += 1
                     else: # Generic dictionary handling
                         for subkey in value.keys():
                             # Handle nested position/rotation in camera data
                             if isinstance(value[subkey], dict) and ('position' in value[subkey] or 'rotation' in value[subkey]):
                                  for subsubkey in value[subkey].keys():
-                                      data_types[f"{prefix}{key}.{subkey}.{subsubkey}"] += 1
+                                    data_types[f"{prefix}{key}.{subkey}.{subsubkey}"] += 1
                             # Handle lists like position/rotation directly under camera_pos_X
                             elif isinstance(value[subkey], list) and subkey in ['position', 'rotation']:
                                 data_types[f"{prefix}{key}.{subkey} (list)"] += 1
                             else:
                                 data_types[f"{prefix}{key}.{subkey}"] += 1
                 else:
-                    data_types[f"{prefix}{key}"] += 1 # Should not happen based on sample, but good practice
+                    data_types[f"{prefix}{key}"] += 1
+
+        for i in range(len(difference1)):
+            print(f"recv-global_pos: {(difference1[i]-int(np.mean(difference1))):4d}ms, recv-camera: {(difference2[i]-int(np.mean(difference2))):4d}ms, time_step: {time_step[i]:4d}ms")
+        if len(difference1) > 0:
+            print(f"Mean recv-global_pos: {int(np.mean(difference1))} +- {int(np.std(difference1))}ms\
+                  \nMean recv-camera:     {int(np.mean(difference2))} +- {int(np.std(difference2))}ms\n")
 
         # Sort for readability
         return dict(sorted(data_types.items()))
@@ -220,11 +246,11 @@ class DataProcessor:
                             try:
                                 first_elem = d[key][0]
                                 if isinstance(first_elem, (list, np.ndarray)):
-                                     # Attempt conversion to a 2D numeric array if elements are lists/arrays
-                                     d[key] = np.array(value, dtype=float)
+                                    # Attempt conversion to a 2D numeric array if elements are lists/arrays
+                                    d[key] = np.array(value, dtype=float)
                                 elif isinstance(first_elem, (int, float)):
-                                     # Attempt conversion to a 1D numeric array if elements are numbers
-                                     d[key] = np.array(value, dtype=float)
+                                    # Attempt conversion to a 1D numeric array if elements are numbers
+                                    d[key] = np.array(value, dtype=float)
                             except (IndexError, TypeError, ValueError):
                                 pass # Keep as object array if conversion fails or list is empty
                     except Exception as e:
@@ -258,7 +284,7 @@ class DataProcessor:
             print("Warning: No data extracted. Running extract_all_data().")
             self.extract_all_data()
             if not self.extracted_data:
-                 raise ValueError("Data extraction failed or produced no data.")
+                raise ValueError("Data extraction failed or produced no data.")
 
 
         # Create aligned data structure
@@ -269,17 +295,17 @@ class DataProcessor:
         if ref_mpu_key not in self.extracted_data:
             raise ValueError(f"Reference MPU key '{ref_mpu_key}' not found in extracted data. Available keys: {list(self.extracted_data.keys())}")
         if reference_sensor not in self.extracted_data[ref_mpu_key]:
-             raise ValueError(f"Reference sensor '{reference_sensor}' not found in MPU {reference_mpu}. Available sensors: {list(self.extracted_data[ref_mpu_key].keys())}")
+            raise ValueError(f"Reference sensor '{reference_sensor}' not found in MPU {reference_mpu}. Available sensors: {list(self.extracted_data[ref_mpu_key].keys())}")
 
         ref_sensor_data = self.extracted_data[ref_mpu_key][reference_sensor]
         if reference_field not in ref_sensor_data:
-             raise ValueError(f"Reference field '{reference_field}' not found in {ref_mpu_key}.{reference_sensor}. Available fields: {list(ref_sensor_data.keys())}")
+            raise ValueError(f"Reference field '{reference_field}' not found in {ref_mpu_key}.{reference_sensor}. Available fields: {list(ref_sensor_data.keys())}")
 
         ref_timestamps = ref_sensor_data[reference_field]
 
         # Ensure reference timestamps are numeric and sorted
         if not isinstance(ref_timestamps, np.ndarray) or not np.issubdtype(ref_timestamps.dtype, np.number):
-             raise TypeError(f"Reference timestamps ({ref_mpu_key}.{reference_sensor}.{reference_field}) are not a numeric numpy array.")
+            raise TypeError(f"Reference timestamps ({ref_mpu_key}.{reference_sensor}.{reference_field}) are not a numeric numpy array.")
         if not np.all(np.diff(ref_timestamps) >= 0):
             print("Warning: Reference timestamps are not monotonically increasing. Sorting them.")
             sort_indices = np.argsort(ref_timestamps)
@@ -287,7 +313,7 @@ class DataProcessor:
             # Apply sorting to other fields in the reference sensor if needed? For now, just sort timestamps.
 
         if len(ref_timestamps) < 2:
-             raise ValueError("Need at least two reference timestamps for interpolation.")
+            raise ValueError("Need at least two reference timestamps for interpolation.")
 
         self.aligned_data['reference'] = {
             'sensor': reference_sensor,
@@ -314,14 +340,14 @@ class DataProcessor:
                             if field_name != 'timestamp' and isinstance(field_data, np.ndarray) and np.issubdtype(field_data.dtype, np.number):
                                 # Ensure data length matches timestamp length for this sensor
                                 if len(field_data) == len(sensor_data['timestamp']):
-                                     current_target_fields.append(field_name)
+                                    current_target_fields.append(field_name)
                                 else:
-                                     print(f"Warning: Skipping {mpu_key}.{sensor_type}.{field_name}. Length mismatch with its timestamp (Data: {len(field_data)}, Timestamp: {len(sensor_data['timestamp'])}).")
+                                    print(f"Warning: Skipping {mpu_key}.{sensor_type}.{field_name}. Length mismatch with its timestamp (Data: {len(field_data)}, Timestamp: {len(sensor_data['timestamp'])}).")
 
                         if current_target_fields:
-                             # Store per MPU to handle cases where same sensor type exists on multiple MPUs
-                             if mpu_number not in auto_target_fields: auto_target_fields[mpu_number] = {}
-                             auto_target_fields[mpu_number][sensor_type] = current_target_fields
+                            # Store per MPU to handle cases where same sensor type exists on multiple MPUs
+                            if mpu_number not in auto_target_fields: auto_target_fields[mpu_number] = {}
+                            auto_target_fields[mpu_number][sensor_type] = current_target_fields
 
             target_fields_to_use = auto_target_fields
         else:
@@ -372,16 +398,16 @@ class DataProcessor:
 
                 # Ensure sensor timestamps are sorted
                 if not np.all(np.diff(sensor_timestamps) >= 0):
-                     print(f"Warning: Timestamps for {mpu_key}.{sensor_type} are not sorted. Sorting them along with data.")
-                     sort_indices = np.argsort(sensor_timestamps)
-                     sensor_timestamps = sensor_timestamps[sort_indices]
-                     # Also sort the data fields that will be interpolated
-                     fields_to_align = mpu_target_sensors[sensor_type]
-                     for field_name in fields_to_align:
-                         if field_name in sensor_data and isinstance(sensor_data[field_name], np.ndarray) and len(sensor_data[field_name]) == len(sort_indices):
-                             sensor_data[field_name] = sensor_data[field_name][sort_indices]
-                         elif field_name in sensor_data:
-                              print(f"Warning: Could not sort data for {mpu_key}.{sensor_type}.{field_name} due to length mismatch or type.")
+                    print(f"Warning: Timestamps for {mpu_key}.{sensor_type} are not sorted. Sorting them along with data.")
+                    sort_indices = np.argsort(sensor_timestamps)
+                    sensor_timestamps = sensor_timestamps[sort_indices]
+                    # Also sort the data fields that will be interpolated
+                    fields_to_align = mpu_target_sensors[sensor_type]
+                    for field_name in fields_to_align:
+                        if field_name in sensor_data and isinstance(sensor_data[field_name], np.ndarray) and len(sensor_data[field_name]) == len(sort_indices):
+                            sensor_data[field_name] = sensor_data[field_name][sort_indices]
+                        elif field_name in sensor_data:
+                            print(f"Warning: Could not sort data for {mpu_key}.{sensor_type}.{field_name} due to length mismatch or type.")
 
 
                 # Get fields to align for this sensor from the target list
@@ -401,8 +427,8 @@ class DataProcessor:
                         print(f"Warning: Skipping interpolation for {mpu_key}.{sensor_type}.{field_name}. Data is not a numeric numpy array.")
                         continue
                     if len(field_data) != len(sensor_timestamps):
-                         print(f"Warning: Skipping interpolation for {mpu_key}.{sensor_type}.{field_name}. Data length ({len(field_data)}) doesn't match timestamp length ({len(sensor_timestamps)}).")
-                         continue
+                        print(f"Warning: Skipping interpolation for {mpu_key}.{sensor_type}.{field_name}. Data length ({len(field_data)}) doesn't match timestamp length ({len(sensor_timestamps)}).")
+                        continue
 
                     # --- Perform Interpolation ---
                     try:
@@ -429,9 +455,9 @@ class DataProcessor:
                         # print(f"Aligned {mpu_key}.{sensor_type}.{field_name}") # Verbose logging
 
                     except ValueError as ve:
-                         # Catches issues like non-unique timestamp values if sorting didn't fix it
-                         print(f"Interpolation ValueError for {mpu_key}.{sensor_type}.{field_name}: {str(ve)}. Ensure timestamps are unique and sorted.")
-                         print(f"Timestamps: {sensor_timestamps}")
+                        # Catches issues like non-unique timestamp values if sorting didn't fix it
+                        print(f"Interpolation ValueError for {mpu_key}.{sensor_type}.{field_name}: {str(ve)}. Ensure timestamps are unique and sorted.")
+                        print(f"Timestamps: {sensor_timestamps}")
                     except Exception as e:
                         # Catch any other unexpected interpolation errors
                         print(f"Error interpolating {mpu_key}.{sensor_type}.{field_name}: {type(e).__name__} - {str(e)}")
@@ -439,16 +465,16 @@ class DataProcessor:
         # Check how much data was actually aligned
         aligned_count = 0
         for mpu, mpu_d in self.aligned_data.items():
-             if mpu == 'reference': continue
-             for sensor, sensor_d in mpu_d.items():
-                  aligned_count += len(sensor_d)
+            if mpu == 'reference': continue
+            for sensor, sensor_d in mpu_d.items():
+                aligned_count += len(sensor_d)
 
         if aligned_count == 0 and target_fields is None:
-             print("\nWarning: No data fields were aligned. Possible reasons:")
-             print("- Reference sensor/MPU/field incorrect?")
-             print("- No other sensors had matching 'timestamp' fields and numeric data?")
-             print("- Timestamps ranges do not overlap significantly?")
-             print("- Data length mismatches within sensor groups?")
+            print("\nWarning: No data fields were aligned. Possible reasons:")
+            print("- Reference sensor/MPU/field incorrect?")
+            print("- No other sensors had matching 'timestamp' fields and numeric data?")
+            print("- Timestamps ranges do not overlap significantly?")
+            print("- Data length mismatches within sensor groups?")
 
 
         return self.aligned_data
@@ -456,7 +482,7 @@ class DataProcessor:
     def export_to_pandas(self):
         """Export data to pandas DataFrame."""
         if not self.aligned_data or 'reference' not in self.aligned_data or 'timestamps' not in self.aligned_data['reference']:
-            print("Warning: Aligned data not available, exporting raw extracted data if available.")
+            #print("Warning: Aligned data not available, exporting raw extracted data if available.")
             data_source = self.extracted_data
         else:
             data_source = self.aligned_data
@@ -489,21 +515,21 @@ class DataProcessor:
                         continue
                     column_name = f"{key}_{sensor_type}_{field_name}" if key.startswith("mpu") else f"{sensor_type}_{field_name}"
                     if column_name in df_dict:
-                         print(f"Warning: Duplicate column name generated: {column_name}. Overwriting.")
+                        print(f"Warning: Duplicate column name generated: {column_name}. Overwriting.")
                     df_dict[column_name] = field_values
 
         try:
-             # Flatten multi-dimensional arrays to avoid DataFrame errors
-             for name, value in df_dict.items():
-                 if isinstance(value, np.ndarray) and (value.ndim > 1):
-                     df_dict[name] = list(value)
-             df = pd.DataFrame(df_dict)
-             return df
+            # Flatten multi-dimensional arrays to avoid DataFrame errors
+            for name, value in df_dict.items():
+                if isinstance(value, np.ndarray) and (value.ndim > 1):
+                    df_dict[name] = list(value)
+            df = pd.DataFrame(df_dict)
+            return df
         except ValueError as e:
-             print("\nError creating DataFrame. Check for unequal array lengths:")
-             for name, data in df_dict.items():
-                  print(f"  Column '{name}': Length {len(data)}")
-             raise ValueError(f"Could not create DataFrame: {e}")
+            print(f"\nError creating DataFrame. Error: {e} \nCheck for unequal array lengths:")
+            for name, data in df_dict.items():
+                print(f"  Column '{name}': Length {len(data)}")
+            raise ValueError(f"Could not create DataFrame: {e}")
 
     def print_data(self, sensor_types=None, mpu_units=None, num_rows=10):
         # Print a preview of the data in a DataFrame format.
@@ -521,11 +547,11 @@ class DataProcessor:
 
         all_sensors = set()
         for mpu in show_mpus:
-             if (self.aligned_data and mpu in self.aligned_data) or (not self.aligned_data and mpu in self.extracted_data):
-                 if self.aligned_data:
-                     all_sensors.update(self.aligned_data[mpu].keys())
-                 else:
-                     all_sensors.update(self.extracted_data[mpu].keys())
+            if (self.aligned_data and mpu in self.aligned_data) or (not self.aligned_data and mpu in self.extracted_data):
+                if self.aligned_data:
+                    all_sensors.update(self.aligned_data[mpu].keys())
+                else:
+                    all_sensors.update(self.extracted_data[mpu].keys())
         show_sensors = sensor_types if sensor_types is not None else list(all_sensors)
 
         for mpu in show_mpus:
@@ -535,7 +561,7 @@ class DataProcessor:
                     for field in data_source[mpu][sensor].keys():
                          col_name = f"mpu{mpu}_{sensor}_{field}"
                          if col_name in df.columns:
-                              cols_to_show.append(col_name)
+                            cols_to_show.append(col_name)
 
         if len(cols_to_show) > 1:
             with pd.option_context('display.max_rows', num_rows,
@@ -593,15 +619,15 @@ class DataProcessor:
 
                     for field in plot_fields:
                         if field not in self.aligned_data[mpu][sensor]:
-                             # print(f"Warning: Field {field} not found for MPU {mpu}, Sensor {sensor}.")
-                             continue
+                            # print(f"Warning: Field {field} not found for MPU {mpu}, Sensor {sensor}.")
+                            continue
 
                         field_data = self.aligned_data[mpu][sensor][field]
                         # Ensure data has same length as timestamps
                         if len(field_data) == len(timestamps_plot):
-                             all_plot_items.append((mpu, sensor, field, field_data))
+                            all_plot_items.append((mpu, sensor, field, field_data))
                         else:
-                             print(f"Warning: Skipping plot for mpu{mpu}_{sensor}_{field}. Length mismatch (Data: {len(field_data)}, Timestamps: {len(timestamps_plot)}).")
+                            print(f"Warning: Skipping plot for mpu{mpu}_{sensor}_{field}. Length mismatch (Data: {len(field_data)}, Timestamps: {len(timestamps_plot)}).")
 
 
             if not all_plot_items:
@@ -611,7 +637,7 @@ class DataProcessor:
             # Group items by field name for plotting on separate axes
             plots_by_field = defaultdict(list)
             for mpu, sensor, field, data in all_plot_items:
-                 plots_by_field[field].append({'mpu': mpu, 'sensor': sensor, 'data': data})
+                plots_by_field[field].append({'mpu': mpu, 'sensor': sensor, 'data': data})
 
             num_plots = len(plots_by_field)
             if num_plots == 0:
@@ -626,89 +652,104 @@ class DataProcessor:
             # Plot data
             ax_idx = 0
             for field_name, plot_list in plots_by_field.items():
-                 ax = axes[ax_idx]
-                 for plot_item in plot_list:
-                     mpu = plot_item['mpu']
-                     sensor = plot_item['sensor']
-                     data = plot_item['data']
-                     label = f"MPU {mpu} ({sensor})"
-                     ax.plot(timestamps_plot, data, label=label, marker='.', markersize=2, linestyle='-') # Small markers + line
+                ax = axes[ax_idx]
+                for plot_item in plot_list:
+                    mpu = plot_item['mpu']
+                    sensor = plot_item['sensor']
+                    data = plot_item['data']
+                    label = f"MPU {mpu} ({sensor})"
+                    ax.plot(timestamps_plot, data, label=label, marker='.', markersize=2, linestyle='-') # Small markers + line
 
-                 ax.set_title(f"Field: {field_name}")
-                 ax.set_ylabel("Value")
-                 ax.legend()
-                 ax.grid(True)
-                 ax_idx += 1
+                ax.set_title(f"Field: {field_name}")
+                ax.set_ylabel("Value")
+                ax.legend()
+                ax.grid(True)
+                ax_idx += 1
 
             # Common X label
             if sharex:
-                 axes[-1].set_xlabel("Timestamp") # Or "Time (s)" if converted
+                axes[-1].set_xlabel("Timestamp") # Or "Time (s)" if converted
             else:
-                 for ax in axes:
-                      ax.set_xlabel("Timestamp")
+                for ax in axes:
+                    ax.set_xlabel("Timestamp")
 
 
             plt.suptitle(f"Aligned Sensor Data (Ref: MPU {self.aligned_data['reference']['mpu']} {self.aligned_data['reference']['sensor']})", fontsize=16)#, y=1.02) # Adjust y position
             plt.tight_layout(rect=[0, 0.03, 1, 0.98]) # Adjust layout to prevent title overlap
             plt.show()
         else:
-             print("Aligned data not available. Using extracted data for visualization. Data might not be synchronized.")
-             all_plot_items = []  # Each item: (mpu_key, sensor, field, timestamps, y_data)
-             available_mpus = list(self.extracted_data.keys())
-             # Use provided mpu_units if given, adapting number to key format if needed.
-             plot_mpus = []
-             if mpu_units is not None:
-                 for m in mpu_units:
-                     key = f"mpu{m}" if f"mpu{m}" in self.extracted_data else m
-                     plot_mpus.append(key)
-             else:
-                 plot_mpus = available_mpus
+            print("Aligned data not available. Using extracted data for visualization. Data might not be synchronized.")
+            all_plot_items = []  # Each item: (mpu_key, sensor, field, timestamps, y_data)
+            available_mpus = list(self.extracted_data.keys())
+            # Use provided mpu_units if given, adapting number to key format if needed.
+            plot_mpus = []
+            if mpu_units is not None:
+                for m in mpu_units:
+                    key = f"mpu{m}" if f"mpu{m}" in self.extracted_data else m
+                    plot_mpus.append(key)
+            else:
+                plot_mpus = available_mpus
 
-             for mpu_key in plot_mpus:
-                 if mpu_key not in self.extracted_data:
-                     print(f"Warning: MPU {mpu_key} not found in extracted data.")
-                     continue
-                 mpu_data = self.extracted_data[mpu_key]
-                 sensors = sensor_types if sensor_types is not None else mpu_data.keys()
-                 for sensor in sensors:
-                     if sensor not in mpu_data:
-                         continue
-                     sensor_data = mpu_data[sensor]
-                     if 'timestamp' not in sensor_data:
-                         print(f"Warning: Sensor {sensor} in {mpu_key} has no timestamp.")
-                         continue
-                     timestamps = sensor_data['timestamp']
-                     for field in (fields if fields is not None else sensor_data.keys()):
-                         if field == 'timestamp' or field not in sensor_data:
-                             continue
-                         y_data = sensor_data[field]
-                         if len(y_data) != len(timestamps):
-                             print(f"Warning: Length mismatch in {mpu_key}.{sensor}.{field}. Skipping.")
-                             continue
-                         all_plot_items.append((mpu_key, sensor, field, timestamps, y_data))
-             if not all_plot_items:
-                 print("No data to plot based on the specified filters in extracted data.")
-                 return
+            for mpu_key in plot_mpus:
+                if mpu_key not in self.extracted_data:
+                    print(f"Warning: MPU {mpu_key} not found in extracted data.")
+                    continue
+                mpu_data = self.extracted_data[mpu_key]
+                sensors = sensor_types if sensor_types is not None else mpu_data.keys()
+                for sensor in sensors:
+                    if sensor not in mpu_data:
+                        continue
+                    sensor_data = mpu_data[sensor]
+                    if 'timestamp' not in sensor_data:
+                        print(f"Warning: Sensor {sensor} in {mpu_key} has no timestamp.")
+                        continue
+                    timestamps = sensor_data['timestamp']
+                    for field in (fields if fields is not None else sensor_data.keys()):
+                        if field == 'timestamp' or field not in sensor_data:
+                            continue
+                        y_data = sensor_data[field]
+                        if len(y_data) != len(timestamps):
+                            print(f"Warning: Length mismatch in {mpu_key}.{sensor}.{field}. Skipping.")
+                            continue
+                        all_plot_items.append((mpu_key, sensor, field, timestamps, y_data))
+            if not all_plot_items:
+                print("No data to plot based on the specified filters in extracted data.")
+                return
 
-             num_plots = len(all_plot_items)
-             fig, axes = plt.subplots(num_plots, 1, figsize=(figsize[0], figsize[1]*num_plots), sharex=sharex)
-             if num_plots == 1:
-                 axes = [axes]
-             for ax, (mpu_key, sensor, field, timestamps, y_data) in zip(axes, all_plot_items):
-                 ax.plot(timestamps, y_data, marker='.', markersize=2, linestyle='-',
-                         label=f"{mpu_key} ({sensor}) - {field}")
-                 ax.set_title(f"{mpu_key}.{sensor}.{field}")
-                 ax.set_ylabel("Value")
-                 ax.legend()
-                 ax.grid(True)
-             axes[-1].set_xlabel("Timestamp")
-             plt.tight_layout()
-             plt.show()
+            num_plots = len(all_plot_items)
+            if num_plots > 3:
+                ncols = 2
+                nrows = (num_plots + 1) // ncols
+            else:
+                ncols = 1
+                nrows = num_plots
+            
+            _, axes = plt.subplots(nrows, ncols, figsize=(figsize[0]*ncols, figsize[1]*nrows), sharex=sharex)
+
+            # Flatten the axes array so that each element is a matplotlib Axes object
+            axes = np.array(axes).flatten()
+            # Remove the single plot check (not needed after flattening)
+            for ax, (mpu_key, sensor, field, timestamps, y_data) in zip(axes, all_plot_items):
+                if y_data.ndim > 1:
+                    vals = ["x", "y", "z", "xr", "yr", "zr"]
+                    for i in range(y_data.shape[1]):
+                        ax.plot(timestamps, y_data[:, i], marker='.', markersize=2, linestyle='-',
+                                label=f"{mpu_key} ({sensor}) - {field}_{vals[i]}")
+                else:
+                    ax.plot(timestamps, y_data, marker='.', markersize=2, linestyle='-',
+                            label=f"{mpu_key} ({sensor}) - {field}")
+                ax.set_title(f"{mpu_key}.{sensor}.{field}")
+                ax.set_ylabel("Value")
+                ax.legend()
+                ax.grid(True)
+            axes[-1].set_xlabel("Timestamp")
+            plt.tight_layout()
+            plt.show()
 
 # --- Example Usage ---
 if __name__ == "__main__":
     #dummy_file_name = "data_handling_test"
-    dummy_file_name = "ChArUco Single 4.5m run2"
+    dummy_file_name = "ChArUco Quad 7m run1"
     
     # --- Run the Processor ---
     dummy_file_path = "recordings/" + dummy_file_name + ".json"
@@ -728,12 +769,13 @@ if __name__ == "__main__":
 
     # Print preview of aligned data
     print("\n--- Data Preview ---")
-    processor.print_data(sensor_types=['acceleration', 'camera_pos_0'], mpu_units=[0, 1, 4], num_rows=5)
+    #processor.print_data(sensor_types=['acceleration'], mpu_units=[0, 1, 4], num_rows=5)
 
     # Visualize specific aligned data
     # Plot acceleration (x, y, z) from MPU 0 and pressure depth0 from MPU 0 & 3
     print("\n--- Visualizing Data ---")
-    processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
-    processor.visualize(mpu_units=[0], sensor_types=['gyroscope'], fields=['x', 'y', 'z'])
-    processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0'])
-    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0'], fields=['position', 'rotation'])
+    #processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
+    #processor.visualize(mpu_units=[0], sensor_types=['gyroscope'], fields=['x', 'y', 'z'])
+    #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
+    #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
+    #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
