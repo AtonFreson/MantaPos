@@ -69,7 +69,7 @@ class DataProcessor:
         difference1 = []
         difference2 = []
         time_step = []
-        last_camera_timestamp = 0
+        last_camera_timestamp = 1741266898664
 
         # Analyze the structure of the JSON data
         for item in self.data:
@@ -88,7 +88,7 @@ class DataProcessor:
                 else:
                     last_camera_timestamp = item['camera']['timestamp']
 
-                difference1.append(recv_time-item['global_pos']['timestamp'])
+                difference1.append(item['camera']['fps'])
                 difference2.append(recv_time-item['camera']['timestamp'])
 
             for key, value in item.items():
@@ -96,14 +96,14 @@ class DataProcessor:
                     data_types[key] += 1
                 elif isinstance(value, dict):
                     if key == 'imu': # Special handling for nested IMU
-                         if 'acceleration' in value and isinstance(value['acceleration'], dict):
-                             for subkey in value['acceleration'].keys():
+                        if 'acceleration' in value and isinstance(value['acceleration'], dict):
+                            for subkey in value['acceleration'].keys():
                                 data_types[f"{prefix}imu.acceleration.{subkey}"] += 1
-                         if 'gyroscope' in value and isinstance(value['gyroscope'], dict):
-                              for subkey in value['gyroscope'].keys():
+                        if 'gyroscope' in value and isinstance(value['gyroscope'], dict):
+                            for subkey in value['gyroscope'].keys():
                                 data_types[f"{prefix}imu.gyroscope.{subkey}"] += 1
                          # Add timestamp if present
-                         if 'timestamp' in value:
+                        if 'timestamp' in value:
                             data_types[f"{prefix}imu.timestamp"] += 1
                     else: # Generic dictionary handling
                         for subkey in value.keys():
@@ -119,11 +119,20 @@ class DataProcessor:
                 else:
                     data_types[f"{prefix}{key}"] += 1
 
+        avg_timestep = 1000/np.mean(difference1)
+        difference3 = [difference2[0]]
+        for i in range(1, len(difference2)):
+            difference3.append(int(difference2[i-1]+avg_timestep))
+        difference3 = np.array(difference3)
+        difference3 -= round(np.mean(np.array(difference3)-np.array(difference2)))
+        
         for i in range(len(difference1)):
-            print(f"recv-global_pos: {(difference1[i]-int(np.mean(difference1))):4d}ms, recv-camera: {(difference2[i]-int(np.mean(difference2))):4d}ms, time_step: {time_step[i]:4d}ms")
+            print(f"fps: {(difference1[i]-np.mean(difference1)):+3.4f}Hz, recv-camera: {(difference2[i]-int(np.mean(difference2))):4d}ms, time_step: {time_step[i]:4d}ms, averaged-camera: {(difference3[i]-difference2[i]):4d}ms")
         if len(difference1) > 0:
-            print(f"Mean recv-global_pos: {int(np.mean(difference1))} +- {int(np.std(difference1))}ms\
-                  \nMean recv-camera:     {int(np.mean(difference2))} +- {int(np.std(difference2))}ms\n")
+            print(f"\nMean fps: {np.mean(difference1):3.3f} +- {np.std(difference1):3.3f}Hz\
+                  \n -> Avg timestep: {avg_timestep:.4f}ms\
+                  \n\nMean recv-camera: {int(np.mean(difference2))} +- {np.std(difference2):3.2f}ms\
+                  \nMean averaged-camera: {np.mean(difference3-np.array(difference2)):.4f} +- {np.std(difference3-np.array(difference2)):.4f}ms\n")
 
         # Sort for readability
         return dict(sorted(data_types.items()))
@@ -204,21 +213,8 @@ class DataProcessor:
                                 sensor_data[subkey] = []
                             sensor_data[subkey].append(subvalue)
 
-                # Handle potential non-dictionary top-level values if necessary
-                # else:
-                #     # Example: if a sensor value was directly at the top level
-                #     sensor_type = top_key
-                #     # Decide how to handle timestamping if it's not in a dict
-                #     # This part depends on the exact data format if it differs from sample
-                #     pass
-
         # Convert all collected data lists to numpy arrays for easier processing
         self._convert_lists_to_arrays()
-
-        # Optional: Print structure of extracted data for verification
-        # import pprint
-        # pprint.pprint(self.extracted_data)
-
         return self.extracted_data
 
     def _ensure_dict_in_extracted_data(self, sensor_type, mpu_unit=None):
@@ -757,10 +753,10 @@ if __name__ == "__main__":
     processor.load_data()
 
     # Print available data types (more detailed now)
-    print("\n--- Available Data Types ---")
+    #print("\n--- Available Data Types ---")
     data_types = processor.extract_data_types()
     # Use pprint for better readability of nested structures
-    pprint.pprint(data_types)
+    #pprint.pprint(data_types)
 
     extracted = processor.extract_all_data()
 
