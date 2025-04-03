@@ -66,8 +66,9 @@ class DataProcessor:
             raise ValueError("No data loaded. Call load_data() first.")
 
         data_types = defaultdict(int)
-        difference1 = []
-        difference2 = []
+        cam_fpss = []
+        recv_times = []
+        cam_timestamps = []
         time_step = []
         last_camera_timestamp = 1741266898664
 
@@ -78,9 +79,6 @@ class DataProcessor:
             
             # Printing the unit 4 time differences for debugging
             if mpu_unit == 4:
-                recv_time = item.get('recv_time')
-                recv_time = int(datetime.datetime.fromisoformat(recv_time).timestamp() * 1000) # Convert to milliseconds timestamp
-
                 time_step.append(item['camera']['timestamp'] - last_camera_timestamp)
                 if time_step[-1] < 0:
                     item['camera']['timestamp'] += 1000
@@ -88,8 +86,9 @@ class DataProcessor:
                 else:
                     last_camera_timestamp = item['camera']['timestamp']
 
-                difference1.append(item['camera']['fps'])
-                difference2.append(recv_time-item['camera']['timestamp'])
+                cam_fpss.append(item['camera']['fps'])
+                recv_times.append(int(datetime.datetime.fromisoformat(item.get('recv_time')).timestamp() * 1000))
+                cam_timestamps.append(item['camera']['timestamp'])
 
             for key, value in item.items():
                 if key in ['mpu_unit', 'recv_time', 'packet_number']:
@@ -119,20 +118,31 @@ class DataProcessor:
                 else:
                     data_types[f"{prefix}{key}"] += 1
 
-        avg_timestep = 1000/np.mean(difference1)
-        difference3 = [difference2[0]]
-        for i in range(1, len(difference2)):
-            difference3.append(int(difference2[i-1]+avg_timestep))
-        difference3 = np.array(difference3)
-        difference3 -= round(np.mean(np.array(difference3)-np.array(difference2)))
+        mean_recv_camera = int(np.mean(np.array(recv_times)-np.array(cam_timestamps)))
+        recv_times = np.array(recv_times) - mean_recv_camera
+
+        #ref_timestamps = np.copy(cam_timestamps)
+        ref_timestamps = np.copy(recv_times)
+        avg_timestep = 1000/np.mean(cam_fpss)
+        avg_timestamps = [ref_timestamps[0]-avg_timestep*0.1]
+        for i in range(1, len(ref_timestamps)):
+            avg_timestamps.append(avg_timestamps[i-1] + avg_timestep)
+            while avg_timestamps[i] + avg_timestep < ref_timestamps[i]:
+                avg_timestamps[i] += avg_timestep
+
+        avg_timestamps = np.array(avg_timestamps)
+        #avg_timestamps -= np.mean(np.array(avg_timestamps)-np.array(cam_timestamps))
+        avg_timestamps = np.round(avg_timestamps)
+        avg_timestamps = avg_timestamps.astype(int)
         
-        for i in range(len(difference1)):
-            print(f"fps: {(difference1[i]-np.mean(difference1)):+3.4f}Hz, recv-camera: {(difference2[i]-int(np.mean(difference2))):4d}ms, time_step: {time_step[i]:4d}ms, averaged-camera: {(difference3[i]-difference2[i]):4d}ms")
-        if len(difference1) > 0:
-            print(f"\nMean fps: {np.mean(difference1):3.3f} +- {np.std(difference1):3.3f}Hz\
+        for i in range(len(cam_fpss)):
+            print(f"cam_fps-mean: {(cam_fpss[i]-np.mean(cam_fpss)):+3.4f}Hz, time_step: {time_step[i]:4d}ms, recv-camera: {(recv_times[i]-cam_timestamps[i]):4d}ms, avg-camera: {(avg_timestamps[i]-cam_timestamps[i]):4d}ms, avg-recv: {(avg_timestamps[i]-recv_times[i]):4d}ms")
+        if len(cam_fpss) > 0:
+            print(f"\nMean fps: {np.mean(cam_fpss):3.3f} +- {np.std(cam_fpss):3.3f}Hz\
                   \n -> Avg timestep: {avg_timestep:.4f}ms\
-                  \n\nMean recv-camera: {int(np.mean(difference2))} +- {np.std(difference2):3.2f}ms\
-                  \nMean averaged-camera: {np.mean(difference3-np.array(difference2)):.4f} +- {np.std(difference3-np.array(difference2)):.4f}ms\n")
+                  \n\nMean recv-camera: {mean_recv_camera} +- {np.std(np.array(recv_times)-np.array(cam_timestamps)):.2f}ms\
+                  \nMean avg-camera: {np.mean(avg_timestamps-np.array(cam_timestamps)):.4f} +- {np.std(avg_timestamps-np.array(cam_timestamps)):.4f}ms\
+                  \nMean avg-recv: {np.mean(avg_timestamps-np.array(recv_times)):.4f} +- {np.std(avg_timestamps-np.array(recv_times)):.4f}ms")
 
         # Sort for readability
         return dict(sorted(data_types.items()))
