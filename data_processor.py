@@ -131,19 +131,24 @@ class DataProcessor:
                 avg_timestamps[i] += avg_timestep
 
         avg_timestamps = np.array(avg_timestamps)
-        #avg_timestamps -= np.mean(np.array(avg_timestamps)-np.array(cam_timestamps))
+        #avg_timestamps -= np.mean(np.array(avg_timestamps)-np.array(ref_timestamps))
         avg_timestamps = np.round(avg_timestamps)
         avg_timestamps = avg_timestamps.astype(int)
         
         for i in range(len(cam_fpss)):
-            print(f"cam_fps-mean: {(cam_fpss[i]-np.mean(cam_fpss)):+3.4f}Hz, time_step: {time_step[i]:4d}ms, recv-camera: {(recv_times[i]-cam_timestamps[i]):4d}ms, avg-camera: {(avg_timestamps[i]-cam_timestamps[i]):4d}ms, avg-recv: {(avg_timestamps[i]-recv_times[i]):4d}ms")
+            print(f"cam_fps-mean: {(cam_fpss[i]-np.mean(cam_fpss)):+3.4f}Hz, time_step: {time_step[i]:4d}ms, time_step-avg: {avg_timestamps[i]-avg_timestamps[i-1]:4d}, recv-camera: {(recv_times[i]-cam_timestamps[i]):4d}ms, avg-camera: {(avg_timestamps[i]-cam_timestamps[i]):4d}ms, avg-recv: {(avg_timestamps[i]-recv_times[i]):4d}ms", end="")
+            
+            # Check for positive difference
+            if avg_timestamps[i] > recv_times[i]:
+                print("     <-")
+            else:
+                print("")
         if len(cam_fpss) > 0:
             print(f"\nMean fps: {np.mean(cam_fpss):3.3f} +- {np.std(cam_fpss):3.3f}Hz\
                   \n -> Avg timestep: {avg_timestep:.4f}ms\
                   \n\nMean recv-camera: {mean_recv_camera} +- {np.std(np.array(recv_times)-np.array(cam_timestamps)):.2f}ms\
                   \nMean avg-camera: {np.mean(avg_timestamps-np.array(cam_timestamps)):.4f} +- {np.std(avg_timestamps-np.array(cam_timestamps)):.4f}ms\
                   \nMean avg-recv: {np.mean(avg_timestamps-np.array(recv_times)):.4f} +- {np.std(avg_timestamps-np.array(recv_times)):.4f}ms")
-
         # Sort for readability
         return dict(sorted(data_types.items()))
 
