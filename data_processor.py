@@ -7,6 +7,44 @@ from collections import defaultdict
 import os
 import pprint
 import datetime
+import numpy as np
+
+def compute_pos_from_accel(accelerations: np.ndarray, timestamps: np.ndarray, start_pos: float) -> np.ndarray:
+    """
+    Compute positions by integrating acceleration twice.
+
+    Parameters:
+    - accelerations: numpy array of acceleration values in m/s².
+    - timestamps: numpy array of unixtime timestamps in milliseconds.
+    - start_pos: starting position in meters.
+
+    Returns:
+    - positions: numpy array of position values in meters corresponding to the timestamps.
+    """
+    # Ensure the input arrays have the same length.
+    if accelerations.shape[0] != timestamps.shape[0]:
+        raise ValueError("The acceleration and timestamp arrays must have the same length.")
+
+    n = len(accelerations)
+    velocities = np.empty(n)
+    positions = np.empty(n)
+    
+    # Assume initial velocity is 0 m/s.
+    velocities[0] = 0.0
+    positions[0] = start_pos
+    
+    # Loop through each time interval, using the trapezoidal rule.
+    for i in range(1, n):
+        # Convert time difference from milliseconds to seconds.
+        dt = (timestamps[i] - timestamps[i-1]) / 1000.0
+        
+        # Integrate acceleration to update velocity.
+        velocities[i] = velocities[i-1] + 0.5 * (accelerations[i-1] + accelerations[i]) * dt
+        
+        # Integrate velocity to update position.
+        positions[i] = positions[i-1] + 0.5 * (velocities[i-1] + velocities[i]) * dt
+    
+    return positions
 
 class DataProcessor:
     """
@@ -57,10 +95,12 @@ class DataProcessor:
             raise IOError(f"Error reading file '{self.file_path}': {e}")
 
 
-    def extract_data_types(self):
+    def extract_data_types(self, debug_print=""):
         """
         Extract and categorize all available data types from the loaded JSON.
         Returns a dictionary of data types and their occurrences.
+        Parameters:
+        - debug_print: If "all", prints detailed debug information. If "result", prints summary statistics.
         """
         if not self.data:
             raise ValueError("No data loaded. Call load_data() first.")
@@ -118,37 +158,40 @@ class DataProcessor:
                 else:
                     data_types[f"{prefix}{key}"] += 1
 
+        # Print timestep debug data
         mean_recv_camera = int(np.mean(np.array(recv_times)-np.array(cam_timestamps)))
         recv_times = np.array(recv_times) - mean_recv_camera
 
         #ref_timestamps = np.copy(cam_timestamps)
-        ref_timestamps = np.copy(recv_times)
+        ref_timestamps = np.copy(recv_times) # referencing receiver timestamps seems more reliable
         avg_timestep = 1000/np.mean(cam_fpss)
-        avg_timestamps = [ref_timestamps[0]-avg_timestep*0.1]
+        avg_timestamps = [ref_timestamps[0]-1]
         for i in range(1, len(ref_timestamps)):
             avg_timestamps.append(avg_timestamps[i-1] + avg_timestep)
             while avg_timestamps[i] + avg_timestep < ref_timestamps[i]:
                 avg_timestamps[i] += avg_timestep
 
         avg_timestamps = np.array(avg_timestamps)
-        #avg_timestamps -= np.mean(np.array(avg_timestamps)-np.array(ref_timestamps))
         avg_timestamps = np.round(avg_timestamps)
         avg_timestamps = avg_timestamps.astype(int)
         
-        for i in range(len(cam_fpss)):
-            print(f"cam_fps-mean: {(cam_fpss[i]-np.mean(cam_fpss)):+3.4f}Hz, time_step: {time_step[i]:4d}ms, time_step-avg: {avg_timestamps[i]-avg_timestamps[i-1]:4d}, recv-camera: {(recv_times[i]-cam_timestamps[i]):4d}ms, avg-camera: {(avg_timestamps[i]-cam_timestamps[i]):4d}ms, avg-recv: {(avg_timestamps[i]-recv_times[i]):4d}ms", end="")
-            
-            # Check for positive difference
-            if avg_timestamps[i] > recv_times[i]:
-                print("     <-")
-            else:
-                print("")
-        if len(cam_fpss) > 0:
+        if debug_print == "all":
+            for i in range(len(cam_fpss)):
+                print(f"cam_fps-mean: {(cam_fpss[i]-np.mean(cam_fpss)):+3.4f}Hz, time_step_cam: {time_step[i]:4d}ms, time_step_recv: {recv_times[i]-recv_times[i-1]:4d}ms, time_step_avg: {avg_timestamps[i]-avg_timestamps[i-1]:4d}, recv-camera: {(recv_times[i]-cam_timestamps[i]):4d}ms, avg-camera: {(avg_timestamps[i]-cam_timestamps[i]):4d}ms, avg-recv: {(avg_timestamps[i]-recv_times[i]):4d}ms", end="")
+                
+                # Check for positive difference
+                if avg_timestamps[i] > ref_timestamps[i]:
+                    print("     <- Warning: camera time after PC")
+                else:
+                    print("")
+
+        if len(cam_fpss) > 0 and debug_print == "result":
             print(f"\nMean fps: {np.mean(cam_fpss):3.3f} +- {np.std(cam_fpss):3.3f}Hz\
-                  \n -> Avg timestep: {avg_timestep:.4f}ms\
+                  \n -> Avg cam timestep: {avg_timestep:.4f}ms\
                   \n\nMean recv-camera: {mean_recv_camera} +- {np.std(np.array(recv_times)-np.array(cam_timestamps)):.2f}ms\
                   \nMean avg-camera: {np.mean(avg_timestamps-np.array(cam_timestamps)):.4f} +- {np.std(avg_timestamps-np.array(cam_timestamps)):.4f}ms\
                   \nMean avg-recv: {np.mean(avg_timestamps-np.array(recv_times)):.4f} +- {np.std(avg_timestamps-np.array(recv_times)):.4f}ms")
+        
         # Sort for readability
         return dict(sorted(data_types.items()))
 
@@ -230,6 +273,28 @@ class DataProcessor:
 
         # Convert all collected data lists to numpy arrays for easier processing
         self._convert_lists_to_arrays()
+        
+        # Compute integ_pos.x for IMU using acceleration.x from the 'acceleration' sensor group.
+        for mpu_key, mpu_data in self.extracted_data.items():
+            if 'acceleration' in mpu_data:
+                accel_data = mpu_data['acceleration']
+                for direction in ['x', 'y', 'z']:
+                    if 'timestamp' in accel_data and direction in accel_data:
+                        ts = accel_data['timestamp']
+                        a_dir = accel_data[direction].copy() # Copy to avoid modifying original data
+                        a_dir -= np.mean(a_dir) # Center the acceleration data around 0 for integration
+                        if isinstance(ts, np.ndarray) and len(ts) > 1 and isinstance(a_dir, np.ndarray) and len(a_dir) == len(ts):
+                            try:
+                                pos_dir = compute_pos_from_accel(a_dir.astype(float), ts.astype(float), start_pos=0.0)
+                                # Add computed integ_pos.x to new 'imu' key
+                                if 'integ_pos' not in mpu_data:
+                                    mpu_data['integ_pos'] = {}
+                                mpu_data['integ_pos'][direction] = pos_dir
+                                if 'timestamp' not in mpu_data['integ_pos']:
+                                    mpu_data['integ_pos']['timestamp'] = ts
+                            except Exception as e:
+                                print(f"Error computing position for {mpu_key}: {e}")
+
         return self.extracted_data
 
     def _ensure_dict_in_extracted_data(self, sensor_type, mpu_unit=None):
@@ -769,7 +834,7 @@ if __name__ == "__main__":
 
     # Print available data types (more detailed now)
     #print("\n--- Available Data Types ---")
-    data_types = processor.extract_data_types()
+    data_types = processor.extract_data_types("result")
     # Use pprint for better readability of nested structures
     #pprint.pprint(data_types)
 
@@ -785,8 +850,10 @@ if __name__ == "__main__":
     # Visualize specific aligned data
     # Plot acceleration (x, y, z) from MPU 0 and pressure depth0 from MPU 0 & 3
     print("\n--- Visualizing Data ---")
-    #processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
+    processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0], sensor_types=['gyroscope'], fields=['x', 'y', 'z'])
+    #processor.visualize(mpu_units=[0], sensor_types=['acceleration','integ_pos'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
+    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
