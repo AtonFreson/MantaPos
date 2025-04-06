@@ -9,6 +9,8 @@ import pprint
 import datetime
 import numpy as np
 
+timestamp_lines = 0
+
 def compute_pos_from_accel(accelerations: np.ndarray, timestamps: np.ndarray, start_pos: float) -> np.ndarray:
     """
     Compute positions by integrating acceleration twice.
@@ -37,6 +39,13 @@ def compute_pos_from_accel(accelerations: np.ndarray, timestamps: np.ndarray, st
     for i in range(1, n):
         # Convert time difference from milliseconds to seconds.
         dt = (timestamps[i] - timestamps[i-1]) / 1000.0
+        if dt > 10: # Ignore time differences larger than 10 seconds
+            print(f"Warning: Large time difference detected: {dt}s. Assuming velocity, position reset.")
+            velocities[i-1] = 0.0
+            positions[i-1] = start_pos
+            velocities[i] = 0.0
+            positions[i] = start_pos
+            continue
         
         # Integrate acceleration to update velocity.
         velocities[i] = velocities[i-1] + 0.5 * (accelerations[i-1] + accelerations[i]) * dt
@@ -52,35 +61,63 @@ class DataProcessor:
     Supports data extraction, alignment, visualization, and export.
     """
 
-    def __init__(self, file_path=None):
-        """Initialize the DataProcessor with an optional file path."""
-        self.file_path = file_path
+    def __init__(self, file_paths=None):
+        """Initialize the DataProcessor with optional file paths."""
+        self.file_paths = file_paths
         self.data = None
         self.extracted_data = {}
         self.aligned_data = None
 
-    def load_data(self, file_path=None):
-        """Load JSON data from file."""
-        if file_path:
-            self.file_path = file_path
+    def load_data(self, file_paths=None):
+        """Load and combine JSON data from multiple files."""
+        if file_paths:
+            self.file_paths = file_paths
 
-        if not self.file_path:
-            raise ValueError("File path not provided.")
+        if not self.file_paths:
+            raise ValueError("File paths not provided.")
+        
+        files_with_timestamp = []
+        for file in self.file_paths:
+            try:
+                # Check if file exists before trying to open
+                if not os.path.exists(file):
+                    raise FileNotFoundError(f"Error: File not found at {file}")
+                with open(file, 'r', encoding='utf-8') as f:
+                    first_line = f.readline()
+                    ts_str = first_line[30:30+26]
+                    ts =  datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S.%f")
+                files_with_timestamp.append((file, ts))
+            except Exception as e:
+                print(f"Error reading timestamp from {file}: {e}")
 
-        # Check if file exists before trying to open
-        if not os.path.exists(self.file_path):
-             raise FileNotFoundError(f"Error: File not found at {self.file_path}")
+        print("Sorting files by timestamp...")
+        files_with_timestamp.sort(key=lambda x: x[1])
 
-        try:
-            with open(self.file_path, 'r') as f:
-                self.data = [json.loads(line) for line in f]
-            print(f"Loaded {len(self.data)} records from {self.file_path}")
+        combined_data = []
+        try:  
+            for file, _ in files_with_timestamp:
+                with open(file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip():
+                            combined_data.append(json.loads(line))
+            self.data = combined_data
+
+            # Print the number of records loaded and from which files
+            print(f"Loaded {len(self.data)} records from {len(files_with_timestamp)} file{'s' if len(files_with_timestamp) > 1 else ''}:", end=" ")
+            files_str = ""
+            for file, _ in files_with_timestamp[:min(4, len(files_with_timestamp))]: # Limit to 5 files for printing]
+                files_str += f"'{file[11:]}', "
+            if len(files_with_timestamp) < 5:
+                print(files_str[:-2])
+            else:
+                print(f"{files_str[:-2]}...")
+
             return True
         except json.JSONDecodeError as e:
             # Try to find the line number
             error_line = -1
             try:
-                with open(self.file_path, 'r') as f_err:
+                with open(file, 'r') as f_err:
                     for i, _ in enumerate(f_err):
                         if i + 1 == e.lineno:
                             break
@@ -88,17 +125,16 @@ class DataProcessor:
             except Exception:
                 pass # Ignore errors trying to find the line
             if error_line > 0:
-                raise ValueError(f"Error decoding JSON in file '{self.file_path}' at line {error_line}: {e}")
+                raise ValueError(f"Error decoding JSON in file '{file}' at line {error_line}: {e}")
             else:
-                raise ValueError(f"Error decoding JSON in file '{self.file_path}': {e}")
+                raise ValueError(f"Error decoding JSON in file '{file}': {e}")
         except Exception as e: # Catch other potential file reading errors
             raise IOError(f"Error reading file '{self.file_path}': {e}")
 
-
-    def extract_data_types(self, debug_print=""):
+    def process_data_timings(self, debug_print=""):
         """
-        Extract and categorize all available data types from the loaded JSON.
-        Returns a dictionary of data types and their occurrences.
+        Analyze the timing of the data and print debug information.
+        Returns the averaged timestamps that tries to assume a camera timestamp.
         Parameters:
         - debug_print: If "all", prints detailed debug information. If "result", prints summary statistics.
         """
@@ -119,16 +155,16 @@ class DataProcessor:
             
             # Printing the unit 4 time differences for debugging
             if mpu_unit == 4:
-                time_step.append(item['camera']['timestamp'] - last_camera_timestamp)
-                if time_step[-1] < 0:
-                    item['camera']['timestamp'] += 1000
-                    last_camera_timestamp = item['camera']['timestamp']//1000 * 1000
-                else:
-                    last_camera_timestamp = item['camera']['timestamp']
-
                 cam_fpss.append(item['camera']['fps'])
                 recv_times.append(int(datetime.datetime.fromisoformat(item.get('recv_time')).timestamp() * 1000))
                 cam_timestamps.append(item['camera']['timestamp'])
+
+                time_step.append(cam_timestamps[-1] - last_camera_timestamp)
+                if time_step[-1] < 0:
+                    cam_timestamps[-1] += 1000
+                    last_camera_timestamp = cam_timestamps[-1]//1000 * 1000
+                else:
+                    last_camera_timestamp = cam_timestamps[-1]
 
             for key, value in item.items():
                 if key in ['mpu_unit', 'recv_time', 'packet_number']:
@@ -175,8 +211,8 @@ class DataProcessor:
         avg_timestamps = np.round(avg_timestamps)
         avg_timestamps = avg_timestamps.astype(int)
         
-        if debug_print == "all":
-            for i in range(len(cam_fpss)):
+        for i in range(len(cam_fpss)):
+            if debug_print == "all":
                 print(f"cam_fps-mean: {(cam_fpss[i]-np.mean(cam_fpss)):+3.4f}Hz, time_step_cam: {time_step[i]:4d}ms, time_step_recv: {recv_times[i]-recv_times[i-1]:4d}ms, time_step_avg: {avg_timestamps[i]-avg_timestamps[i-1]:4d}, recv-camera: {(recv_times[i]-cam_timestamps[i]):4d}ms, avg-camera: {(avg_timestamps[i]-cam_timestamps[i]):4d}ms, avg-recv: {(avg_timestamps[i]-recv_times[i]):4d}ms", end="")
                 
                 # Check for positive difference
@@ -184,6 +220,8 @@ class DataProcessor:
                     print("     <- Warning: camera time after PC")
                 else:
                     print("")
+            elif avg_timestamps[i] > ref_timestamps[i]:
+                print(f"Warning: camera time after PC at index {i} & time {ref_timestamps[i]}")
 
         if len(cam_fpss) > 0 and debug_print == "result":
             print(f"\nMean fps: {np.mean(cam_fpss):3.3f} +- {np.std(cam_fpss):3.3f}Hz\
@@ -193,7 +231,7 @@ class DataProcessor:
                   \nMean avg-recv: {np.mean(avg_timestamps-np.array(recv_times)):.4f} +- {np.std(avg_timestamps-np.array(recv_times)):.4f}ms")
         
         # Sort for readability
-        return dict(sorted(data_types.items()))
+        return avg_timestamps
 
     def extract_all_data(self):
         """Extract all available sensor data and organize by type and MPU unit."""
@@ -281,8 +319,12 @@ class DataProcessor:
                 for direction in ['x', 'y', 'z']:
                     if 'timestamp' in accel_data and direction in accel_data:
                         ts = accel_data['timestamp']
-                        a_dir = accel_data[direction].copy() # Copy to avoid modifying original data
-                        a_dir -= np.mean(a_dir) # Center the acceleration data around 0 for integration
+                        a_dir = accel_data[direction]#.copy() # Copy to avoid modifying original data
+                        
+                        # Center the acceleration data around 0 for integration
+                        #a_dir -= np.mean(a_dir)
+                        a_dir -= np.median(a_dir)
+                        
                         if isinstance(ts, np.ndarray) and len(ts) > 1 and isinstance(a_dir, np.ndarray) and len(a_dir) == len(ts):
                             try:
                                 pos_dir = compute_pos_from_accel(a_dir.astype(float), ts.astype(float), start_pos=0.0)
@@ -650,7 +692,7 @@ class DataProcessor:
         print(f"\nShowing first {min(num_rows, len(df))} rows.")
         print(f"Total rows: {len(df)}, Total columns in full exported data: {len(df.columns)}")
 
-    def visualize(self, sensor_types=None, mpu_units=None, fields=None, figsize=(15, 5), sharex=True):
+    def visualize(self, sensor_types=None, mpu_units=None, fields=None, figsize=(8, 3), sharex=True):
         """
         Visualize the aligned sensor data, plotting each field on its own subplot.
 
@@ -793,7 +835,10 @@ class DataProcessor:
                 return
 
             num_plots = len(all_plot_items)
-            if num_plots > 3:
+            if num_plots > 8:
+                ncols = 3
+                nrows = (num_plots + 2) // ncols
+            elif num_plots > 3:
                 ncols = 2
                 nrows = (num_plots + 1) // ncols
             else:
@@ -824,19 +869,51 @@ class DataProcessor:
 
 # --- Example Usage ---
 if __name__ == "__main__":
-    #dummy_file_name = "data_handling_test"
-    dummy_file_name = "ChArUco Quad 7m run1"
-    
+    filenames = []
+    #filenames.extend(["all_runs_ordered"])
+
+    filenames.extend(["ChArUco Quad 2m run1"])
+    #filenames.extend(["ChArUco Quad 7m run1"])
+
+    '''filenames.extend(["ChArUco Quad 2m run1", "ChArUco Quad 2m run2", "ChArUco Quad 2m run3"])
+    filenames.extend(["ChArUco Quad 4.5m run1", "ChArUco Quad 4.5m run2", "ChArUco Quad 4.5m run3"])
+    filenames.extend(["ChArUco Quad 7m run3", "ChArUco Quad 7m run2", "ChArUco Quad 7m run1"])
+
+    filenames.extend(["ArUco Quad 2m run1", "ArUco Quad 2m run2", "ArUco Quad 2m run3"])
+    filenames.extend(["ArUco Quad 4.5m run1", "ArUco Quad 4.5m run2", "ArUco Quad 4.5m run3"])
+    filenames.extend(["ArUco Quad 7m run1", "ArUco Quad 7m run2", "ArUco Quad 7m run3"])
+
+    filenames.extend(["ChArUco Single 2m run1", "ChArUco Single 2m run2", "ChArUco Single 2m run3"])
+    filenames.extend(["ChArUco Single 4.5m run1", "ChArUco Single 4.5m run2", "ChArUco Single 4.5m run3"])
+    filenames.extend(["ChArUco Single 7m run1", "ChArUco Single 7m run2", "ChArUco Single 7m run3"])
+
+    filenames.extend(["ArUco Single 2m run1", "ArUco Single 2m run2", "ArUco Single 2m run3"])
+    filenames.extend(["ArUco Single 4.5m run1", "ArUco Single 4.5m run2", "ArUco Single 4.5m run3"])
+    filenames.extend(["ArUco Single 7m run1", "ArUco Single 7m run2", "ArUco Single 7m run3"])
+
+    filenames.extend(["ChArUco Single 4.5-2m", "ChArUco Single 4.5-7m"])
+    filenames.extend(["ArUco Single 2-4.5m", "ArUco Single 7-4.5m"])
+    filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
+    filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
+
     # --- Run the Processor ---
-    dummy_file_path = "recordings/" + dummy_file_name + ".json"
-    processor = DataProcessor(dummy_file_path)
+    #dummy_file_path = "recordings/" + dummy_file_name + ".json"
+    filepaths = [f"recordings/{name}.json" for name in filenames]
+    processor = DataProcessor(filepaths)
     processor.load_data()
 
     # Print available data types (more detailed now)
     #print("\n--- Available Data Types ---")
-    data_types = processor.extract_data_types("result")
-    # Use pprint for better readability of nested structures
-    #pprint.pprint(data_types)
+    averaged_timestamps = processor.process_data_timings("result")
+
+    # Set camera timestamps to averaged timestamps
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            data['camera']['timestamp'] = averaged_timestamps[timestamp_lines]
+            timestamp_lines += 1
+    if timestamp_lines != len(averaged_timestamps):
+        print("Warning: Mismatch in camera timestamps and averaged timestamps count.")
+        exit(1)
 
     extracted = processor.extract_all_data()
 
@@ -844,16 +921,17 @@ if __name__ == "__main__":
     #aligned_data = processor.align_data(reference_sensor='encoder', reference_mpu=1)
 
     # Print preview of aligned data
-    print("\n--- Data Preview ---")
+    #print("\n--- Data Preview ---")
     #processor.print_data(sensor_types=['acceleration'], mpu_units=[0, 1, 4], num_rows=5)
 
     # Visualize specific aligned data
     # Plot acceleration (x, y, z) from MPU 0 and pressure depth0 from MPU 0 & 3
     print("\n--- Visualizing Data ---")
-    processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
+    #processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0], sensor_types=['gyroscope'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0], sensor_types=['acceleration','integ_pos'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
-    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
+    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
+    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
