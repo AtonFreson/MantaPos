@@ -736,6 +736,12 @@ class DataProcessor:
                     plot_fields = fields if fields is not None else available_fields
 
                     for field in plot_fields:
+                        negative = False
+                        if field[0] == '-':
+                            field = field[1:]
+                            negative = True
+
+
                         if field not in self.aligned_data[mpu][sensor]:
                             # print(f"Warning: Field {field} not found for MPU {mpu}, Sensor {sensor}.")
                             continue
@@ -743,7 +749,7 @@ class DataProcessor:
                         field_data = self.aligned_data[mpu][sensor][field]
                         # Ensure data has same length as timestamps
                         if len(field_data) == len(timestamps_plot):
-                            all_plot_items.append((mpu, sensor, field, field_data))
+                            all_plot_items.append((mpu, sensor, field, field_data, negative))
                         else:
                             print(f"Warning: Skipping plot for mpu{mpu}_{sensor}_{field}. Length mismatch (Data: {len(field_data)}, Timestamps: {len(timestamps_plot)}).")
 
@@ -754,8 +760,8 @@ class DataProcessor:
 
             # Group items by field name for plotting on separate axes
             plots_by_field = defaultdict(list)
-            for mpu, sensor, field, data in all_plot_items:
-                plots_by_field[field].append({'mpu': mpu, 'sensor': sensor, 'data': data})
+            for mpu, sensor, field, data, negative in all_plot_items:
+                plots_by_field[field].append({'mpu': mpu, 'sensor': sensor, 'data': data, 'negative': negative})
 
             num_plots = len(plots_by_field)
             if num_plots == 0:
@@ -775,6 +781,8 @@ class DataProcessor:
                     mpu = plot_item['mpu']
                     sensor = plot_item['sensor']
                     data = plot_item['data']
+                    if plot_item['negative']:
+                        data = -data # Negate data if specified
                     label = f"MPU {mpu} ({sensor})"
                     ax.plot(timestamps_plot, data, label=label, marker='.', markersize=2, linestyle='-') # Small markers + line
 
@@ -795,6 +803,7 @@ class DataProcessor:
             plt.suptitle(f"Aligned Sensor Data (Ref: MPU {self.aligned_data['reference']['mpu']} {self.aligned_data['reference']['sensor']})", fontsize=16)#, y=1.02) # Adjust y position
             plt.tight_layout(rect=[0, 0.03, 1, 0.98]) # Adjust layout to prevent title overlap
             plt.show()
+
         else:
             print("Aligned data not available. Using extracted data for visualization. Data might not be synchronized.")
             all_plot_items = []  # Each item: (mpu_key, sensor, field, timestamps, y_data)
@@ -823,13 +832,18 @@ class DataProcessor:
                         continue
                     timestamps = sensor_data['timestamp']
                     for field in (fields if fields is not None else sensor_data.keys()):
+                        negative = False
+                        if field[0] == '-':
+                            field = field[1:]
+                            negative = True
+
                         if field == 'timestamp' or field not in sensor_data:
                             continue
                         y_data = sensor_data[field]
                         if len(y_data) != len(timestamps):
                             print(f"Warning: Length mismatch in {mpu_key}.{sensor}.{field}. Skipping.")
                             continue
-                        all_plot_items.append((mpu_key, sensor, field, timestamps, y_data))
+                        all_plot_items.append((mpu_key, sensor, field, timestamps, y_data, negative))
             if not all_plot_items:
                 print("No data to plot based on the specified filters in extracted data.")
                 return
@@ -850,13 +864,17 @@ class DataProcessor:
             # Flatten the axes array so that each element is a matplotlib Axes object
             axes = np.array(axes).flatten()
             # Remove the single plot check (not needed after flattening)
-            for ax, (mpu_key, sensor, field, timestamps, y_data) in zip(axes, all_plot_items):
+            for ax, (mpu_key, sensor, field, timestamps, y_data, negative) in zip(axes, all_plot_items):
                 if y_data.ndim > 1:
                     vals = ["x", "y", "z", "xr", "yr", "zr"]
                     for i in range(y_data.shape[1]):
+                        if negative:
+                            y_data[:, i] = -y_data[:, i]
                         ax.plot(timestamps, y_data[:, i], marker='.', markersize=2, linestyle='-',
                                 label=f"{mpu_key} ({sensor}) - {field}_{vals[i]}")
                 else:
+                    if negative:
+                        y_data = -y_data
                     ax.plot(timestamps, y_data, marker='.', markersize=2, linestyle='-',
                             label=f"{mpu_key} ({sensor}) - {field}")
                 ax.set_title(f"{mpu_key}.{sensor}.{field}")
@@ -896,17 +914,12 @@ if __name__ == "__main__":
     filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
     filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
 
-    # --- Run the Processor ---
-    #dummy_file_path = "recordings/" + dummy_file_name + ".json"
     filepaths = [f"recordings/{name}.json" for name in filenames]
     processor = DataProcessor(filepaths)
     processor.load_data()
 
-    # Print available data types (more detailed now)
-    #print("\n--- Available Data Types ---")
-    averaged_timestamps = processor.process_data_timings("result")
-
     # Set camera timestamps to averaged timestamps
+    averaged_timestamps = processor.process_data_timings("result") # "result" or "raw"
     for data in processor.data:
         if data['mpu_unit'] == 4:
             data['camera']['timestamp'] = averaged_timestamps[timestamp_lines]
@@ -914,6 +927,49 @@ if __name__ == "__main__":
     if timestamp_lines != len(averaged_timestamps):
         print("Warning: Mismatch in camera timestamps and averaged timestamps count.")
         exit(1)
+
+    # Get the offset from zero for the camera data by averaging all values within the first 1000ms
+    camera_data = []
+    initial_timestamp = None
+    marker_unit = 2
+    time_correction = 500 # Time correction in ms for camera data
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            if 'camera_pos_'+str(marker_unit) not in data:
+                continue
+            if initial_timestamp is None:
+                initial_timestamp = data['camera']['timestamp']
+            if data['camera']['timestamp'] - initial_timestamp < 1000:
+                camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
+            else:
+                break
+    
+    if camera_data:
+        camera_data = np.array(camera_data)
+        camera_pos_offset = np.mean(camera_data, axis=0)
+        print(f"\nCamera position offset: {camera_pos_offset} +- {np.std(camera_data, axis=0)} (# vals: {len(camera_data)})")
+
+
+    # Create a new data entry for the camera data that checks the timestamp difference between the camera y-value and the encoder value for a specific position value
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            if 'camera_pos_'+str(marker_unit) not in data:
+                continue
+
+            position_val = data['camera_pos_'+str(marker_unit)]['position'][1] - camera_pos_offset
+            position_timestamp = data['camera']['timestamp']+time_correction
+            for data_ref in processor.data:
+                if data_ref['mpu_unit'] == 0:
+                    if -data_ref['encoder']['distance'] < position_val:
+                        if abs(position_timestamp - data_ref['encoder']['timestamp']) > 1000:
+                            data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
+                        else:
+                            data['camera_pos_'+str(marker_unit)]['time_offset'] = position_timestamp - data_ref['encoder']['timestamp']
+                        break
+                    else:
+                        data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
+
+            #data['camera_pos_2']['position'][1] = data['camera_pos_2']['position'][1] - camera_pos_offset
 
     extracted = processor.extract_all_data()
 
@@ -933,5 +989,6 @@ if __name__ == "__main__":
     #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
-    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
+    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
+    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_2', 'encoder', 'camera'], fields=['position', '-distance', 'time_offset'])
