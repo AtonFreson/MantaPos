@@ -928,11 +928,13 @@ if __name__ == "__main__":
         print("Warning: Mismatch in camera timestamps and averaged timestamps count.")
         exit(1)
 
+
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
-    camera_data = []
-    initial_timestamp = None
     marker_unit = 2
     time_correction = 500 # Time correction in ms for camera data
+
+    camera_data = []
+    initial_timestamp = None
     for data in processor.data:
         if data['mpu_unit'] == 4:
             if 'camera_pos_'+str(marker_unit) not in data:
@@ -949,8 +951,7 @@ if __name__ == "__main__":
         camera_pos_offset = np.mean(camera_data, axis=0)
         print(f"\nCamera position offset: {camera_pos_offset} +- {np.std(camera_data, axis=0)} (# vals: {len(camera_data)})")
 
-
-    # Create a new data entry for the camera data that checks the timestamp difference between the camera y-value and the encoder value for a specific position value
+    # Create a new data entry for the camera data that checks the timestamp difference
     for data in processor.data:
         if data['mpu_unit'] == 4:
             if 'camera_pos_'+str(marker_unit) not in data:
@@ -972,6 +973,7 @@ if __name__ == "__main__":
             #data['camera_pos_2']['position'][1] = data['camera_pos_2']['position'][1] - camera_pos_offset
 
     extracted = processor.extract_all_data()
+
 
     #print("\n--- Aligning Data ---")
     #aligned_data = processor.align_data(reference_sensor='encoder', reference_mpu=1)
