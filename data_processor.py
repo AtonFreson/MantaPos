@@ -890,7 +890,7 @@ if __name__ == "__main__":
     filenames = []
     #filenames.extend(["all_runs_ordered"])
 
-    filenames.extend(["ChArUco Quad 2m run1"])
+    filenames.extend(["ChArUco Quad 2m run2"])
     #filenames.extend(["ChArUco Quad 7m run1"])
 
     '''filenames.extend(["ChArUco Quad 2m run1", "ChArUco Quad 2m run2", "ChArUco Quad 2m run3"])
@@ -932,7 +932,7 @@ if __name__ == "__main__":
     camera_data = []
     initial_timestamp = None
     marker_unit = 2
-    time_correction = 500 # Time correction in ms for camera data
+    time_correction = 0 # Time correction in ms for camera data
     for data in processor.data:
         if data['mpu_unit'] == 4:
             if 'camera_pos_'+str(marker_unit) not in data:
@@ -948,6 +948,13 @@ if __name__ == "__main__":
         camera_data = np.array(camera_data)
         camera_pos_offset = np.mean(camera_data, axis=0)
         print(f"\nCamera position offset: {camera_pos_offset} +- {np.std(camera_data, axis=0)} (# vals: {len(camera_data)})")
+
+        offset_encoder = False
+        if offset_encoder:
+            for data in processor.data:
+                if data['mpu_unit'] == 0:
+                    data['encoder']['distance'] -= camera_pos_offset
+            camera_pos_offset = 0
 
 
     # Create a new data entry for the camera data that checks the timestamp difference between the camera y-value and the encoder value for a specific position value
@@ -969,7 +976,7 @@ if __name__ == "__main__":
                     else:
                         data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
 
-            #data['camera_pos_2']['position'][1] = data['camera_pos_2']['position'][1] - camera_pos_offset
+            data['camera_pos_2']['position'][1] = data['camera_pos_2']['position'][1] - camera_pos_offset
 
     extracted = processor.extract_all_data()
 
@@ -989,6 +996,8 @@ if __name__ == "__main__":
     #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
-    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
-    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_2', 'encoder', 'camera'], fields=['position', '-distance', 'time_offset'])
+    
+    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
+
+    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_2', 'encoder', 'camera', 'integ_pos'], fields=['position', '-distance', 'time_offset', 'y'])
