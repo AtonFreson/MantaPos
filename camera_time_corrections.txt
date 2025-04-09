@@ -1,0 +1,4 @@
+"ChArUco Quad 2m run1" 500
+"ChArUco Quad 2m run2" 600
+"ChArUco Quad 2m run3" 500
+"ChArUco Quad 4.5m run1" 800

@@ -880,7 +880,15 @@ class DataProcessor:
                 ax.set_title(f"{mpu_key}.{sensor}.{field}")
                 ax.set_ylabel("Value")
                 ax.legend()
-                ax.grid(True)
+                ax.xaxis.set_major_locator(plt.MaxNLocator(24))
+                ax.yaxis.set_major_locator(plt.MaxNLocator(12))
+                ax.minorticks_on()
+                ax.grid(True, which='major', linestyle='-', linewidth=0.8, alpha=0.7)
+                ax.grid(True, which='minor', linestyle=':', linewidth=0.5, alpha=0.4)
+                ax.spines['top'].set_visible(True)
+                ax.spines['right'].set_visible(True)
+                ax.tick_params(which='both', top=True, right=True)
+                
             axes[-1].set_xlabel("Timestamp")
             plt.tight_layout()
             plt.show()
@@ -889,9 +897,6 @@ class DataProcessor:
 if __name__ == "__main__":
     filenames = []
     #filenames.extend(["all_runs_ordered"])
-
-    filenames.extend(["ChArUco Quad 2m run2"])
-    #filenames.extend(["ChArUco Quad 7m run1"])
 
     '''filenames.extend(["ChArUco Quad 2m run1", "ChArUco Quad 2m run2", "ChArUco Quad 2m run3"])
     filenames.extend(["ChArUco Quad 4.5m run1", "ChArUco Quad 4.5m run2", "ChArUco Quad 4.5m run3"])
@@ -914,6 +919,8 @@ if __name__ == "__main__":
     filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
     filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
 
+    filenames.extend(["ChArUco Quad 4.5m run2"])
+
     filepaths = [f"recordings/{name}.json" for name in filenames]
     processor = DataProcessor(filepaths)
     processor.load_data()
@@ -929,11 +936,18 @@ if __name__ == "__main__":
         exit(1)
 
 
-    # Get the offset from zero for the camera data by averaging all values within the first 1000ms
-    marker_unit = 2
-    time_correction = 500 # Time correction in ms for camera data
+    # Time correction variables
+    marker_unit = 3
+    display_all = 0
+    rising_edge = 1
+    normalize_data = False
+    offset_encoder = False
+    time_correction = 800 # Time correction in ms for camera data
 
+    # Get the offset from zero for the camera data by averaging all values within the first 1000ms
     camera_data = []
+    camera_data_ext = []
+    ref_data = []
     initial_timestamp = None
     for data in processor.data:
         if data['mpu_unit'] == 4:
@@ -943,15 +957,43 @@ if __name__ == "__main__":
                 initial_timestamp = data['camera']['timestamp']
             if data['camera']['timestamp'] - initial_timestamp < 1000:
                 camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
-            else:
-                break
+            elif normalize_data:
+                camera_data_ext.append(data['camera_pos_'+str(marker_unit)]['position'][1])
+        if data['mpu_unit'] == 0 and normalize_data:
+            if 'encoder' not in data:
+                continue
+            ref_data.append(data['encoder']['distance'])
     
     if camera_data:
         camera_data = np.array(camera_data)
-        camera_pos_offset = np.mean(camera_data, axis=0)
-        print(f"\nCamera position offset: {camera_pos_offset} +- {np.std(camera_data, axis=0)} (# vals: {len(camera_data)})")
 
-        offset_encoder = False
+        if normalize_data:
+            ref_data = np.array(ref_data)
+            camera_data_ext = np.append(camera_data, camera_data_ext)
+            camera_data = (camera_data - np.mean(camera_data)) / np.std(camera_data)  # Z-score normalization
+            camera_data_ext = (camera_data_ext - np.mean(camera_data_ext)) / np.std(camera_data_ext)  # Z-score normalization  
+            ref_data = (ref_data - np.mean(ref_data)) / np.std(ref_data)  # Z-score normalization
+
+        camera_pos_offset = np.mean(camera_data, axis=0) if not normalize_data else 0
+        print(f"\nCamera position offset: {camera_pos_offset:2.4f} +- {np.std(camera_data, axis=0):.5f} (# vals: {len(camera_data)})")
+    
+        # Set the normalized data
+        if normalize_data:
+            camera_data = camera_data_ext
+            data_int = 0
+            ref_int = 0
+            for data in processor.data:
+                if data['mpu_unit'] == 4:
+                    if 'camera_pos_'+str(marker_unit) not in data:
+                        continue
+                    data['camera_pos_'+str(marker_unit)]['position'][1] = camera_data[data_int]
+                    data_int += 1
+                if data['mpu_unit'] == 0:
+                    if 'encoder' not in data:
+                        continue
+                    data['encoder']['distance'] = ref_data[ref_int]
+                    ref_int += 1
+
         if offset_encoder:
             for data in processor.data:
                 if data['mpu_unit'] == 0:
@@ -969,16 +1011,27 @@ if __name__ == "__main__":
             position_timestamp = data['camera']['timestamp']+time_correction
             for data_ref in processor.data:
                 if data_ref['mpu_unit'] == 0:
-                    if -data_ref['encoder']['distance'] < position_val:
+                    if data_ref['encoder']['timestamp'] < position_timestamp-2000:
+                        continue
+                    if (-data_ref['encoder']['distance'] > position_val if rising_edge else -data_ref['encoder']['distance'] < position_val):
                         if abs(position_timestamp - data_ref['encoder']['timestamp']) > 1000:
-                            data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
+                            for data_ref_inner in processor.data:
+                                if data_ref_inner['mpu_unit'] == 0:
+                                    if data_ref_inner['encoder']['timestamp'] < position_timestamp-2000:
+                                        continue
+                                    if (-data_ref_inner['encoder']['distance'] < position_val if rising_edge else -data_ref_inner['encoder']['distance'] > position_val):
+                                        data['camera_pos_'+str(marker_unit)]['time_offset'] = min(max(-1000, position_timestamp - data_ref_inner['encoder']['timestamp']), 1000)
+                                        break
+                                    else:
+                                        data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
                         else:
                             data['camera_pos_'+str(marker_unit)]['time_offset'] = position_timestamp - data_ref['encoder']['timestamp']
                         break
                     else:
                         data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
 
-            data['camera_pos_2']['position'][1] = data['camera_pos_2']['position'][1] - camera_pos_offset
+            if not offset_encoder:
+                data['camera_pos_'+str(marker_unit)]['position'][1] = data['camera_pos_'+str(marker_unit)]['position'][1] - camera_pos_offset
 
     extracted = processor.extract_all_data()
 
@@ -997,10 +1050,11 @@ if __name__ == "__main__":
     #processor.visualize(mpu_units=[0], sensor_types=['gyroscope'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0], sensor_types=['acceleration','integ_pos'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
-    #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
+    if display_all:
+        processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
     
-    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
+    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
 
-    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_2', 'encoder', 'camera', 'integ_pos'], fields=['position', '-distance', 'time_offset', 'y'])
+    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], fields=['position', '-distance', 'time_offset'])
