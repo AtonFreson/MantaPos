@@ -947,7 +947,9 @@ if __name__ == "__main__":
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
     camera_data = []
     camera_data_ext = []
+    camera_timestamps = []
     ref_data = []
+    ref_timestamps = []
     initial_timestamp = None
     for data in processor.data:
         if data['mpu_unit'] == 4:
@@ -959,10 +961,12 @@ if __name__ == "__main__":
                 camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
             elif normalize_data:
                 camera_data_ext.append(data['camera_pos_'+str(marker_unit)]['position'][1])
-        if data['mpu_unit'] == 0 and normalize_data:
+            camera_timestamps.append(data['camera']['timestamp'])
+        if data['mpu_unit'] == 0:
             if 'encoder' not in data:
                 continue
             ref_data.append(data['encoder']['distance'])
+            ref_timestamps.append(data['encoder']['timestamp'])
     
     if camera_data:
         camera_data = np.array(camera_data)
@@ -999,6 +1003,10 @@ if __name__ == "__main__":
                 if data['mpu_unit'] == 0:
                     data['encoder']['distance'] -= camera_pos_offset
             camera_pos_offset = 0
+        
+        pos_difference = []
+        for i in range(len(ref_data)):
+            # Find the closest camera timestamp to the encoder timestamp, and calculate the difference between 
 
 
     # Create a new data entry for the camera data that checks the timestamp difference between the camera y-value and the encoder value for a specific position value
