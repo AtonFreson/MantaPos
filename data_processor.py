@@ -942,8 +942,8 @@ if __name__ == "__main__":
     rising_edge = 1
     normalize_data = False
     offset_encoder = False
-    time_correction = 800 # Time correction in ms for camera data
-    auto_correction_range = [-1000, 2000] # Range for auto-correction in ms
+    time_correction = 610 # Time correction in ms for camera data
+    auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
 
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
     camera_data = []
@@ -999,43 +999,59 @@ if __name__ == "__main__":
                     data['encoder']['distance'] = ref_data[ref_int]
                     ref_int += 1
 
+        camera_data = np.append(camera_data, np.array(camera_data_ext))
         if offset_encoder:
             for data in processor.data:
                 if data['mpu_unit'] == 0:
                     data['encoder']['distance'] -= camera_pos_offset
+            camera_data -= camera_pos_offset
             camera_pos_offset = 0
         
         # Find the closest camera timestamp to the encoder timestamp, and calculate the difference between the position values
         pos_difference = []
-        camera_data = np.append(camera_data, np.array(camera_data_ext))
         camera_timestamps = np.array(camera_timestamps)
         for i in range(len(ref_data)):
             closest_index = np.argmin(np.abs(camera_timestamps - ref_timestamps[i] + time_correction))
-            pos_difference.append(-ref_data[i] - camera_data[min(closest_index, len(camera_data)-1)])
+            closest_index = min(closest_index, len(camera_data)-1)
+            if abs(camera_timestamps[closest_index] - ref_timestamps[i] + time_correction) > 500 and pos_difference:
+                pos_difference.append(pos_difference[-1])
+            else:
+                pos_difference.append(-ref_data[i] - camera_data[closest_index])
 
         # Compute the average of the differences within the specified range
-        for i in range(auto_correction_range[0], auto_correction_range[1], 10):
+        for i in range(auto_correction_range[0], auto_correction_range[1]+10, 10):
             pos_diff = []
             for j in range(len(ref_data)):
-                closest_index = np.argmin(np.abs(camera_timestamps - ref_timestamps[j] + time_correction + i))
-                pos_diff.append(-ref_data[j] - camera_data[min(closest_index, len(camera_data)-1)])
+                closest_index = np.argmin(np.abs(camera_timestamps - ref_timestamps[j] + i))
+                closest_index = min(closest_index, len(camera_data)-1)
+                if abs(camera_timestamps[closest_index] - ref_timestamps[j] + i) > 500:
+                    continue # Skip if the difference is too large
+                pos_diff.append(-ref_data[j] - camera_data[closest_index])
+            
+            # Get indices of values further than 2 std from the mean
+            pos_diff = np.array(pos_diff)[np.abs(pos_diff - np.mean(pos_diff)) < 2*np.std(pos_diff)]
+
             processor.data.append({
                 'mpu_unit': 5,
-                'auto_diff_offset': {
+                'auto-diff_vs_offset': {
                     'timestamp': i,
-                    'offset': np.mean(pos_diff),
-                    'std': np.std(pos_diff),
+                    'mean': np.mean(pos_diff),
+                    'std': np.std(pos_diff)
                 }
             })
-
         idx = 0
+        ref_pos_diff = 0
         for data in processor.data:
             if data['mpu_unit'] == 0:
                 if 'encoder' not in data:
                     continue
                 if idx >= len(pos_difference):
                     break
-                data['encoder']['enc-cam_diff'] = pos_difference[idx]
+                if np.abs(pos_difference[idx] - np.mean(pos_difference)) > 2*np.std(pos_difference) and idx > 0:
+                    data['encoder']['enc-cam_diff'] = ref_pos_diff
+                else:
+                    data['encoder']['enc-cam_diff'] = pos_difference[idx]
+                    ref_pos_diff = pos_difference[idx]
                 idx += 1
 
 
@@ -1096,5 +1112,5 @@ if __name__ == "__main__":
     
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
 
-    processor.visualize(mpu_units=[5], sensor_types=['auto_diff_offset'], fields=['timestamp', 'offset', 'std'])
+    processor.visualize(mpu_units=[5], sensor_types=['auto-diff_vs_offset'], fields=['timestamp', 'mean', 'std'])
     processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
