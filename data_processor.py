@@ -871,7 +871,7 @@ class DataProcessor:
                         if negative:
                             y_data[:, i] = -y_data[:, i]
                         ax.plot(timestamps, y_data[:, i], marker='.', markersize=2, linestyle='-',
-                                label=f"{mpu_key} ({sensor}) - {field}_{vals[i]}")
+                                label=f"{mpu_key} ({sensor}) - {field}_{vals[i] if y_data.shape[1]<=len(vals) else i}")
                 else:
                     if negative:
                         y_data = -y_data
@@ -942,7 +942,7 @@ if __name__ == "__main__":
     rising_edge = 1
     normalize_data = False
     offset_encoder = False
-    time_correction = 610 # Time correction in ms for camera data
+    time_correction = 677.3 # Time correction in ms for camera data
     auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
 
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
@@ -1008,50 +1008,99 @@ if __name__ == "__main__":
             camera_pos_offset = 0
         
         # Find the closest camera timestamp to the encoder timestamp, and calculate the difference between the position values
-        pos_difference = []
-        camera_timestamps = np.array(camera_timestamps)
-        for i in range(len(ref_data)):
-            closest_index = np.argmin(np.abs(camera_timestamps - ref_timestamps[i] + time_correction))
-            closest_index = min(closest_index, len(camera_data)-1)
-            if abs(camera_timestamps[closest_index] - ref_timestamps[i] + time_correction) > 500 and pos_difference:
-                pos_difference.append(pos_difference[-1])
+        pos_difference = [[]]
+        ref_timestamps = np.array(ref_timestamps)
+        for i in range(len(camera_data)):
+            closest_index = np.argmin(np.abs(camera_timestamps[i] - ref_timestamps + time_correction))
+            closest_index = min(closest_index, len(ref_data)-1)
+            if abs(camera_timestamps[i] - ref_timestamps[closest_index] + time_correction) > 500 and len(pos_difference[0]):
+                pos_difference[0].append(pos_difference[0][-1])
             else:
-                pos_difference.append(-ref_data[i] - camera_data[closest_index])
+                pos_difference[0].append(-ref_data[closest_index] - camera_data[i])
 
         # Compute the average of the differences within the specified range
+        std_vals = []
         for i in range(auto_correction_range[0], auto_correction_range[1]+10, 10):
             pos_diff = []
-            for j in range(len(ref_data)):
-                closest_index = np.argmin(np.abs(camera_timestamps - ref_timestamps[j] + i))
-                closest_index = min(closest_index, len(camera_data)-1)
-                if abs(camera_timestamps[closest_index] - ref_timestamps[j] + i) > 500:
+            for j in range(len(camera_data)):
+                closest_index = np.argmin(np.abs(camera_timestamps[j] - ref_timestamps + i))
+                closest_index = min(closest_index, len(ref_data)-1)
+
+                if i in range(int(time_correction)//10*10-200, int(time_correction)//10*10+220, 20):
+                    if i < int(time_correction)-15 or i > int(time_correction)+15:
+                        if j == 0:
+                            pos_difference.append([])
+
+                        if abs(camera_timestamps[j] - ref_timestamps[closest_index] + i) > 500 and j > 0:
+                            pos_difference[-1].append(pos_difference[-1][-1])
+                        else:
+                            pos_difference[-1].append(-ref_data[closest_index] - camera_data[j])
+                
+                if abs(camera_timestamps[j] - ref_timestamps[closest_index] + i) > 500:
                     continue # Skip if the difference is too large
-                pos_diff.append(-ref_data[j] - camera_data[closest_index])
+                pos_diff.append(-ref_data[closest_index] - camera_data[j])
             
             # Get indices of values further than 2 std from the mean
             pos_diff = np.array(pos_diff)[np.abs(pos_diff - np.mean(pos_diff)) < 2*np.std(pos_diff)]
+
+            std_vals.append([i, np.std(pos_diff)])
 
             processor.data.append({
                 'mpu_unit': 5,
                 'auto-diff_vs_offset': {
                     'timestamp': i,
                     'mean': np.mean(pos_diff),
-                    'std': np.std(pos_diff)
+                    'std': std_vals[-1][1]
                 }
             })
+
+        lowest_offset = np.argmin([x[1] for x in std_vals])
+
+        # Create a 2nd order best fit of the data around the lowest offset to find the theoretical best offset
+        # Convert std_vals to numpy array for array indexing
+        std_vals = np.array(std_vals)
+        std_range = std_vals[lowest_offset-100:lowest_offset+100]
+        y_curve = np.poly1d(np.polyfit(std_range[:, 0], std_range[:, 1], 8))
+        y_fit = y_curve(std_vals[:, 0])
+        y_fit += 0.05*(np.max(std_vals[:, 1])-np.min(std_vals[:, 1]))
+        y_fit[:lowest_offset-100] = np.max(std_vals[:, 1])
+        y_fit[lowest_offset+100:] = np.max(std_vals[:, 1])
+        
+        best_offset = np.argmin(y_fit)
+        y_fit[best_offset] = np.max(std_vals[:, 1])
+
+        # Improve the best offset by doing detailed search around the best offset
+        detailed_range = np.arange(std_vals[best_offset-10][0], std_vals[best_offset+10][0], 0.01)
+        best_offset_improved = detailed_range[np.argmin(y_curve(detailed_range))]
+
         idx = 0
-        ref_pos_diff = 0
         for data in processor.data:
-            if data['mpu_unit'] == 0:
-                if 'encoder' not in data:
+            if data['mpu_unit'] == 5:
+                if 'auto-diff_vs_offset' not in data:
                     continue
-                if idx >= len(pos_difference):
+                data['auto-diff_vs_offset']['std'] = [data['auto-diff_vs_offset']['std'], y_fit[idx]]
+                idx += 1
+
+        print(f"\nBest offset for camera data: {best_offset_improved:.2f} ms (closest: {std_vals[best_offset][0]} & std: {std_vals[best_offset][1]:.4f})")
+
+        idx = 0
+        ref_pos_diff = np.zeros(len(pos_difference))
+        ref_pos_diff_idx = range(len(pos_difference))
+        pos_difference = np.array(pos_difference)
+        for data in processor.data:
+            if data['mpu_unit'] == 4:
+                if 'camera_pos_'+str(marker_unit) not in data:
+                    continue
+                if idx >= len(pos_difference[0]):
                     break
-                if np.abs(pos_difference[idx] - np.mean(pos_difference)) > 2*np.std(pos_difference) and idx > 0:
-                    data['encoder']['enc-cam_diff'] = ref_pos_diff
-                else:
-                    data['encoder']['enc-cam_diff'] = pos_difference[idx]
-                    ref_pos_diff = pos_difference[idx]
+                for pos_diff, ref_idx in zip(pos_difference, ref_pos_diff_idx):
+                    if 'enc-cam_diff' not in data['camera_pos_'+str(marker_unit)]:
+                        data['camera_pos_'+str(marker_unit)]['enc-cam_diff'] = []
+                    if np.abs(pos_diff[idx] - np.mean(pos_diff)) > 2*np.std(pos_diff) and idx > 0:
+                        data['camera_pos_'+str(marker_unit)]['enc-cam_diff'].append(ref_pos_diff[ref_idx])
+                    else:
+                        data['camera_pos_'+str(marker_unit)]['enc-cam_diff'].append(pos_diff[idx])
+                        ref_pos_diff[ref_idx] = pos_diff[idx]
                 idx += 1
 
 
@@ -1063,7 +1112,7 @@ if __name__ == "__main__":
                 continue
 
             position_val = data['camera_pos_'+str(marker_unit)]['position'][1] - camera_pos_offset
-            position_timestamp = data['camera']['timestamp']+time_correction
+            position_timestamp = data['camera']['timestamp'] + time_correction
             for data_ref in processor.data:
                 if data_ref['mpu_unit'] == 0:
                     if data_ref['encoder']['timestamp'] < position_timestamp-2000:
@@ -1112,5 +1161,6 @@ if __name__ == "__main__":
     
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
 
-    processor.visualize(mpu_units=[5], sensor_types=['auto-diff_vs_offset'], fields=['timestamp', 'mean', 'std'])
+    processor.visualize(mpu_units=[5], sensor_types=['auto-diff_vs_offset'], fields=['std'])
     processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
+    processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['enc-cam_diff'])
