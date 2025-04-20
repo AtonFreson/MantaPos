@@ -1,5 +1,9 @@
-"ChArUco Quad 2m run1" 500
-"ChArUco Quad 2m run2" 600
-"ChArUco Quad 2m run3" 500
-"ChArUco Quad 4.5m run1" 800
+"ChArUco Quad 2m run1" 525.38
+"ChArUco Quad 2m run2" 604.33
+"ChArUco Quad 2m run3" 619.26
+"ChArUco Quad 4.5m run1" 646.86
 "ChArUco Quad 4.5m run2" 612.32
+"ChArUco Quad 4.5m run3" 664.82
+"ChArUco Quad 7m run1" 
+"ChArUco Quad 7m run2" 
+"ChArUco Quad 7m run3" 

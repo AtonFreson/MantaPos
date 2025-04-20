@@ -8,6 +8,12 @@ import os
 import pprint
 import datetime
 import numpy as np
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="No artists with labels found to put in legend.*",
+    category=UserWarning,
+)
 
 timestamp_lines = 0
 
@@ -692,7 +698,8 @@ class DataProcessor:
         print(f"\nShowing first {min(num_rows, len(df))} rows.")
         print(f"Total rows: {len(df)}, Total columns in full exported data: {len(df.columns)}")
 
-    def visualize(self, sensor_types=None, mpu_units=None, fields=None, figsize=(8, 3), sharex=True, ref_timestamps=None, ref_data=None):
+    def visualize(self, sensor_types=None, mpu_units=None, fields=None, figsize=(8, 3), sharex=True,
+                  ref_timestamps=None, ref_data=None, all_camera_timestamps = None, all_camera_data = None):
         """
         Visualize the aligned sensor data, plotting each field on its own subplot.
 
@@ -871,8 +878,14 @@ class DataProcessor:
                         if negative:
                             y_data[:, i] = -y_data[:, i]
                         if field == 'timestamps_shifted':
+                            # Add aditional data for camera and reference if requested
                             if ref_timestamps is not None and ref_data is not None:
                                 ax.plot(ref_timestamps, ref_data, marker='.', markersize=2, linestyle='-')
+                            if all_camera_timestamps is not None and all_camera_data is not None:
+                                for i in range(4):
+                                    if len(all_camera_data[i]) > 0 and int(sensor[-1]) != i:
+                                        ax.plot(all_camera_timestamps[i], all_camera_data[i], marker='.', markersize=2, linestyle='-')
+
                             ax.plot(y_data[:, 1], y_data[:, 0], marker='.', markersize=2, linestyle='-')
                             for j in range(2, y_data.shape[1]):
                                 ax.plot(y_data[:, j], y_data[:, 0], marker='.', markersize=2, linestyle='-', alpha=0.03)
@@ -901,7 +914,7 @@ class DataProcessor:
                 
             axes[-1].set_xlabel("Timestamp")
             plt.tight_layout()
-            plt.show()
+            plt.show(block=False)
 
 # --- Example Usage ---
 if __name__ == "__main__":
@@ -929,7 +942,7 @@ if __name__ == "__main__":
     filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
     filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
 
-    filenames.extend(["ChArUco Quad 4.5m run2"])
+    filenames.extend(["ChArUco Quad 7m run1"])
 
     filepaths = [f"recordings/{name}.json" for name in filenames]
     processor = DataProcessor(filepaths)
@@ -947,12 +960,13 @@ if __name__ == "__main__":
 
 
     # Time correction variables
-    marker_unit = 3
+    marker_unit = 0
     display_all = 0
     rising_edge = 1
     normalize_data = False
     offset_encoder = False
-    time_correction = 612.32 # Time correction in ms for camera data
+    time_correction = 608.48 # Time correction in ms for camera data
+    flip_around_point = -2.680 # Set to False to disable
     auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
 
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
@@ -968,6 +982,10 @@ if __name__ == "__main__":
                 continue
             if initial_timestamp is None:
                 initial_timestamp = data['camera']['timestamp']
+            
+            if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point:
+                data['camera_pos_'+str(marker_unit)]['position'][1] = flip_around_point - data['camera_pos_'+str(marker_unit)]['position'][1]
+
             if data['camera']['timestamp'] - initial_timestamp < 1000:
                 camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
             else:
@@ -991,6 +1009,9 @@ if __name__ == "__main__":
 
         camera_pos_offset = np.mean(camera_data, axis=0) if not normalize_data else 0
         print(f"\nCamera position offset: {camera_pos_offset:2.4f} +- {np.std(camera_data, axis=0):.5f} (# vals: {len(camera_data)})")
+        if abs(camera_pos_offset-1.2743) > 0.1:
+            print("Warning: Camera position offset is significantly different from expected value (1.2743m). Using the expected value instead.")
+            camera_pos_offset = 1.2743
     
         # Set the normalized data
         if normalize_data:
@@ -1027,7 +1048,7 @@ if __name__ == "__main__":
             if abs(camera_timestamps[i] - ref_timestamps[closest_index] + time_correction) > 500 and len(pos_difference):
                 pos_difference.append(pos_difference[-1])
             else:
-                pos_difference.append(-ref_data[closest_index] - camera_data[i])
+                pos_difference.append(-ref_data[closest_index] - camera_data[i] + camera_pos_offset)
 
             # Shift camera timestamps by the time_correction value
             camera_timestamps_shifted[1].append(camera_timestamps[i] + time_correction)
@@ -1074,7 +1095,7 @@ if __name__ == "__main__":
         std_range = std_vals[lowest_offset-100:lowest_offset+100]
         y_curve = np.poly1d(np.polyfit(std_range[:, 0], std_range[:, 1], 8))
         y_fit = y_curve(std_vals[:, 0])
-        y_fit += 0.05*(np.max(std_vals[:, 1])-np.min(std_vals[:, 1]))
+        y_fit += 0.02*(np.max(std_vals[:, 1])-np.min(std_vals[:, 1]))
         y_fit[:lowest_offset-100] = np.max(std_vals[:, 1])
         y_fit[lowest_offset+100:] = np.max(std_vals[:, 1])
         
@@ -1144,6 +1165,19 @@ if __name__ == "__main__":
             if not offset_encoder:
                 data['camera_pos_'+str(marker_unit)]['position'][1] = data['camera_pos_'+str(marker_unit)]['position'][1] - camera_pos_offset
 
+    # Visualize all camera datas, including the time offset and pos correction
+    all_camera_data = [[], [], [], []]
+    all_camera_timestamps_corrected = [[], [], [], []]
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            for i in range(4):
+                if 'camera_pos_'+str(i) not in data:
+                    continue
+                all_camera_data[i].append(data['camera_pos_'+str(i)]['position'][1] - camera_pos_offset)
+                all_camera_timestamps_corrected[i].append(data['camera']['timestamp'] + time_correction)
+    
+
+
     extracted = processor.extract_all_data()
 
     #print("\n--- Aligning Data ---")
@@ -1166,7 +1200,13 @@ if __name__ == "__main__":
     
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
 
-    #processor.visualize(mpu_units=[5], sensor_types=['auto-diff_vs_offset'], fields=['std'])
-    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
-    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['enc-cam_diff', 'timestamps_shifted'],
-                        ref_timestamps = ref_timestamps, ref_data = -0.92*np.array(ref_data))
+    if display_all:
+        processor.visualize(mpu_units=[5], sensor_types=['auto-diff_vs_offset'], fields=['std'])
+        processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], 
+                            fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
+    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
+                        ref_timestamps = ref_timestamps, ref_data = -0.92*np.array(ref_data), 
+                        all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)
+    
+    # Run matplotlib event loop to keep the plots open
+    plt.show(block=True)
