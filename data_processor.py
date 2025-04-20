@@ -983,7 +983,7 @@ if __name__ == "__main__":
             if initial_timestamp is None:
                 initial_timestamp = data['camera']['timestamp']
             
-            if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point:
+            if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point + 1.3757:
                 data['camera_pos_'+str(marker_unit)]['position'][1] = flip_around_point - data['camera_pos_'+str(marker_unit)]['position'][1]
 
             if data['camera']['timestamp'] - initial_timestamp < 1000:
