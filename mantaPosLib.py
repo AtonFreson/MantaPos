@@ -662,6 +662,93 @@ def calculate_camera_position(tvec, rvec, marker_pos_rot):
 
     return t_camera_global.flatten(), euler_angles_global
 
+# Function to calculate the translation vector (tvec) and rotation vector (rvec) for solvePnP
+# given the global camera pose and marker pose.
+def inverse_calculate_camera_position(camera_position, camera_rotation, marker_pos_rot):
+    """
+    Inverse of calculate_camera_position: computes the translation vector (tvec) and rotation vector (rvec)
+    for solvePnP given the global camera pose and marker pose.
+
+    Parameters:
+        camera_position (array-like): Global camera position [x, y, z].
+        camera_rotation (array-like): Global camera Euler angles [roll, pitch, yaw] in degrees.
+        marker_pos_rot (tuple): Marker global pose ((x, y, z), (roll, pitch, yaw)) in meters and degrees.
+
+    Returns:
+        tvec (numpy.ndarray): Translation vector from marker to camera (3x1).
+        rvec (numpy.ndarray): Rotation vector (Rodrigues) from marker to camera (3x1).
+    """
+    # Extract marker pose
+    marker_pos, marker_rot = marker_pos_rot
+    # Compute marker-to-global rotation matrix
+    roll_m, pitch_m, yaw_m = np.deg2rad(marker_rot)
+    R_marker_global = R.from_euler('xyz', [roll_m, pitch_m, yaw_m]).as_matrix()
+    t_marker_global = np.array(marker_pos).reshape((3, 1))
+
+    # Compute global camera rotation and translation
+    roll_c, pitch_c, yaw_c = np.deg2rad(camera_rotation)
+    R_camera_global = R.from_euler('xyz', [roll_c, pitch_c, yaw_c]).as_matrix()
+    t_camera_global = np.array(camera_position).reshape((3, 1))
+
+    # Compute rotation from marker to camera
+    R_camera_marker = R_marker_global.T @ R_camera_global
+    R_marker_camera = R_camera_marker.T
+
+    # Compute translation from marker to camera
+    t_camera_marker = R_marker_global.T @ (t_camera_global - t_marker_global)
+
+    # Convert rotation matrix to rotation vector
+    rvec, _ = cv2.Rodrigues(R_marker_camera)
+    tvec = t_camera_marker
+
+    return tvec, rvec
+
+# Function to choose the correct pose from solvePnP for a planar ArUco marker
+def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
+                        marker_normal_known=np.array([0, 0, -1], dtype=float),
+                        camera_dir_known   =np.array([0, 0,  1], dtype=float)):
+    """
+    Given one (rvec, tvec) from solvePnP on a planar ArUco, compute the alternate
+    ambiguous solution and pick the one whose marker normal (R·[0,0,1]) is closest
+    to marker_normal_known, and whose translation direction (tvec) most closely
+    aligns with camera_dir_known.
+    """
+    # Get rvec and tvec from the camera position and rotation
+    tvec, rvec = inverse_calculate_camera_position(camera_position, camera_rotation, marker_pos_rot)
+
+    # 1) Get R from rvec
+    R, _ = cv2.Rodrigues(rvec)
+
+    # 2) Build the “flipped” solution: R2 = R·diag(-1, -1, 1), t2 = –t
+    flip = np.diag([-1, -1, 1])
+    R2 = R.dot(flip)
+    rvec2, _ = cv2.Rodrigues(R2)
+    tvec2     = -tvec
+
+    # 3) Compute scores
+    #   a) marker normal in camera coords is the 3rd column of R
+    n1 = R [:, 2]
+    n2 = R2[:, 2]
+    score_rot1 = float(np.dot(n1, marker_normal_known))
+    score_rot2 = float(np.dot(n2, marker_normal_known))
+
+    #   b) translation direction: unit‑vector of tvec (camera→marker)
+    v1 = tvec.flatten()
+    v2 = tvec2.flatten()
+    v1n = v1 / np.linalg.norm(v1)
+    v2n = v2 / np.linalg.norm(v2)
+    score_trans1 = float(np.dot(v1n, camera_dir_known))
+    score_trans2 = float(np.dot(v2n, camera_dir_known))
+
+    # 4) Combine scores (you can weight these as you like; here equal weight)
+    total1 = score_rot1 + score_trans1
+    total2 = score_rot2 + score_trans2
+
+    # 5) Return the best camera orientation, and the probabilities
+    if total1 < total2:
+        rvec, tvec = rvec2, tvec2
+    return calculate_camera_position(tvec, rvec, marker_pos_rot), [total1, total2]
+
 # Function to display the position and orientation of the camera in the global coordinate system
 def display_camera_position(frame, position, rotation, ref_pos, ref_rot, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, 
                             text_color=(0, 255, 0), thickness=1, alpha=0.65, rect_padding=(10, 10, 600, 150)):

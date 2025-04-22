@@ -4,6 +4,7 @@ import pandas as pd
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from collections import defaultdict
+import mantaPosLib as manta
 import os
 import pprint
 import datetime
@@ -14,6 +15,7 @@ warnings.filterwarnings(
     message="No artists with labels found to put in legend.*",
     category=UserWarning,
 )
+
 
 timestamp_lines = 0
 
@@ -961,13 +963,62 @@ if __name__ == "__main__":
 
     # Time correction variables
     marker_unit = 0
-    display_all = 0
+    display_all = 1
     rising_edge = 1
     normalize_data = False
     offset_encoder = False
     time_correction = 608.48 # Time correction in ms for camera data
     flip_around_point = -2.680 # Set to False to disable
     auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
+
+
+
+    MARKERS_Z_LEVEL = -0.3+0.1124
+    QUAD_MARKER_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
+    squares_vertically = 3
+    squares_horizontally = squares_vertically
+    marker_ratio = 0.75
+    square_length = 0.500/squares_vertically # Real world length of each square in meters
+    corner_offset = square_length*squares_vertically/2
+    marker_numbers = [18, 22, 26, 30] # Marker numbers to use in the quad ChArUco boards, number then 3 next
+
+    quad_order = [3, 0, 1, 2]
+    quad_marker_pos = [
+        [QUAD_MARKER_POS[quad_order[0]][0] + corner_offset, QUAD_MARKER_POS[quad_order[0]][1] - corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[1]][0] + corner_offset, QUAD_MARKER_POS[quad_order[1]][1] + corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[2]][0] - corner_offset, QUAD_MARKER_POS[quad_order[2]][1] - corner_offset, MARKERS_Z_LEVEL],
+        [QUAD_MARKER_POS[quad_order[3]][0] + corner_offset, QUAD_MARKER_POS[quad_order[3]][1] - corner_offset, MARKERS_Z_LEVEL]
+    ]
+    quad_marker_rot = [[0,0,90], [0,0,180], [0,0,0], [0,0,90]]
+
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            for marker_idx in range(4):
+                if 'camera_pos_'+str(marker_idx) not in data:
+                    continue
+                #print(type(data['camera_pos_'+str(marker_idx)]['position']))
+                marker_order = [1, 3, 2, 0]
+                (camera_pos, camera_rot), error_scores = manta.alter_to_correct_pose(
+                    data['camera_pos_'+str(marker_idx)]['position'],
+                    data['camera_pos_'+str(marker_idx)]['rotation'],
+                    [quad_marker_pos[marker_order[marker_idx]], quad_marker_rot[marker_order[marker_idx]]]
+                )
+                #print("",type(camera_pos.tolist()))
+                #print(np.array(data['camera_pos_'+str(marker_idx)]['position']) - camera_pos)
+
+                data['camera_pos_'+str(marker_idx)]['position'] = camera_pos
+                data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
+
+                # Notify if the error values are too similar to each other
+                if abs(error_scores[0] - error_scores[1]) < 0.1:
+                    print(f"Warning: Error values for marker {marker_idx} at timestamp {data['camera']['timestamp']} are too similar: {error_scores[0]} and {error_scores[1]}")
+
+    extracted = processor.extract_all_data()
+    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
+    plt.show(block=True)
+
+        
+
 
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
     camera_data = []
@@ -983,8 +1034,8 @@ if __name__ == "__main__":
             if initial_timestamp is None:
                 initial_timestamp = data['camera']['timestamp']
             
-            if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point + 1.3757:
-                data['camera_pos_'+str(marker_unit)]['position'][1] = flip_around_point - data['camera_pos_'+str(marker_unit)]['position'][1]
+            #if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point + 1.3757:
+            #    data['camera_pos_'+str(marker_unit)]['position'][1] = flip_around_point - data['camera_pos_'+str(marker_unit)]['position'][1]
 
             if data['camera']['timestamp'] - initial_timestamp < 1000:
                 camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
