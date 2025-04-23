@@ -996,15 +996,13 @@ if __name__ == "__main__":
             for marker_idx in range(4):
                 if 'camera_pos_'+str(marker_idx) not in data:
                     continue
-                #print(type(data['camera_pos_'+str(marker_idx)]['position']))
-                marker_order = [1, 3, 2, 0]
+
+                marker_order = [[0,1], [1,1], [2,1], [3,1]] # NOT ALL CORRECT
                 (camera_pos, camera_rot), error_scores = manta.alter_to_correct_pose(
                     data['camera_pos_'+str(marker_idx)]['position'],
                     data['camera_pos_'+str(marker_idx)]['rotation'],
-                    [quad_marker_pos[marker_order[marker_idx]], quad_marker_rot[marker_order[marker_idx]]]
+                    [quad_marker_pos[marker_order[marker_idx][0]], quad_marker_rot[marker_order[marker_idx][1]]]
                 )
-                #print("",type(camera_pos.tolist()))
-                #print(np.array(data['camera_pos_'+str(marker_idx)]['position']) - camera_pos)
 
                 data['camera_pos_'+str(marker_idx)]['position'] = camera_pos
                 data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
