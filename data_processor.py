@@ -884,7 +884,7 @@ class DataProcessor:
                             if ref_timestamps is not None and ref_data is not None:
                                 ax.plot(ref_timestamps, ref_data, marker='.', markersize=2, linestyle='-')
                             if all_camera_timestamps is not None and all_camera_data is not None:
-                                for i in range(4):
+                                for i in range(5):
                                     if len(all_camera_data[i]) > 0 and int(sensor[-1]) != i:
                                         ax.plot(all_camera_timestamps[i], all_camera_data[i], marker='.', markersize=2, linestyle='-')
 
@@ -962,22 +962,19 @@ if __name__ == "__main__":
 
 
     # Time correction variables
-    marker_unit = 0
+    marker_unit = 4 #0, 1, 2, 3. 4 is the average
     display_all = 1
     rising_edge = 1
     normalize_data = False
     offset_encoder = False
-    time_correction = 608.48 # Time correction in ms for camera data
-    flip_around_point = -2.680 # Set to False to disable
+    time_correction = 638.00 # Time correction in ms for camera data
+    flip_around_point = False #-2.680 # Set to False to disable
     auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
-
 
 
     MARKERS_Z_LEVEL = -0.3+0.1124
     QUAD_MARKER_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
     squares_vertically = 3
-    squares_horizontally = squares_vertically
-    marker_ratio = 0.75
     square_length = 0.500/squares_vertically # Real world length of each square in meters
     corner_offset = square_length*squares_vertically/2
     marker_numbers = [18, 22, 26, 30] # Marker numbers to use in the quad ChArUco boards, number then 3 next
@@ -993,6 +990,8 @@ if __name__ == "__main__":
 
     for data in processor.data:
         if data['mpu_unit'] == 4:
+            average_pos = []
+            average_rot = []
             for marker_idx in range(4):
                 if 'camera_pos_'+str(marker_idx) not in data:
                     continue
@@ -1006,16 +1005,19 @@ if __name__ == "__main__":
 
                 data['camera_pos_'+str(marker_idx)]['position'] = camera_pos
                 data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
+                average_pos.append(camera_pos)
+                average_rot.append(camera_rot)
 
                 # Notify if the error values are too similar to each other
                 if abs(error_scores[0] - error_scores[1]) < 0.1:
                     print(f"Warning: Error values for marker {marker_idx} at timestamp {data['camera']['timestamp']} are too similar: {error_scores[0]} and {error_scores[1]}")
-
-    extracted = processor.extract_all_data()
-    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
-    plt.show(block=True)
-
-        
+            if len(average_pos) > 0:
+                average_pos = np.mean(np.stack(average_pos, axis=0), axis=0)
+                average_rot = np.mean(np.stack(average_rot, axis=0), axis=0)
+                data['camera_pos_4'] = {
+                    'position': average_pos,
+                    'rotation': average_rot
+            }
 
 
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
@@ -1032,8 +1034,8 @@ if __name__ == "__main__":
             if initial_timestamp is None:
                 initial_timestamp = data['camera']['timestamp']
             
-            #if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point + 1.3757:
-            #    data['camera_pos_'+str(marker_unit)]['position'][1] = flip_around_point - data['camera_pos_'+str(marker_unit)]['position'][1]
+            if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point + 1.3757:
+                data['camera_pos_'+str(marker_unit)]['position'][1] = flip_around_point - data['camera_pos_'+str(marker_unit)]['position'][1]
 
             if data['camera']['timestamp'] - initial_timestamp < 1000:
                 camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
@@ -1215,11 +1217,11 @@ if __name__ == "__main__":
                 data['camera_pos_'+str(marker_unit)]['position'][1] = data['camera_pos_'+str(marker_unit)]['position'][1] - camera_pos_offset
 
     # Visualize all camera datas, including the time offset and pos correction
-    all_camera_data = [[], [], [], []]
-    all_camera_timestamps_corrected = [[], [], [], []]
+    all_camera_data = [[], [], [], [], []]
+    all_camera_timestamps_corrected = [[], [], [], [], []]
     for data in processor.data:
         if data['mpu_unit'] == 4:
-            for i in range(4):
+            for i in range(5):
                 if 'camera_pos_'+str(i) not in data:
                     continue
                 all_camera_data[i].append(data['camera_pos_'+str(i)]['position'][1] - camera_pos_offset)
@@ -1243,7 +1245,7 @@ if __name__ == "__main__":
     #processor.visualize(mpu_units=[0], sensor_types=['acceleration','integ_pos'], fields=['x', 'y', 'z'])
     #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
     if display_all:
-        processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
+        processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], fields=['position'])
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
     
