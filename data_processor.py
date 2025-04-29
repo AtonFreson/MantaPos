@@ -1238,7 +1238,7 @@ if __name__ == "__main__":
         processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], 
                             fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
     processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
-                        ref_timestamps = ref_timestamps, ref_data = -0.92*np.array(ref_data), 
+                        ref_timestamps = ref_timestamps, ref_data = -1*np.array(ref_data), 
                         all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)
     
     # Run matplotlib event loop to keep the plots open
