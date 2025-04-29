@@ -761,8 +761,8 @@ def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
 
     # 5) Return the best camera orientation, and the probabilities
     if total1 < total2:
-        rvec, tvec = rvec2, tvec2
-    return calculate_camera_position(tvec, rvec, marker_pos_rot), [total1, total2]
+        return calculate_camera_position(tvec2, rvec2, marker_pos_rot), [total1, total2], True
+    return (None, None), [total1, total2], False
 
 # Function to display the position and orientation of the camera in the global coordinate system
 def display_camera_position(frame, position, rotation, ref_pos, ref_rot, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, 

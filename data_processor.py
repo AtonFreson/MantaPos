@@ -944,7 +944,7 @@ if __name__ == "__main__":
     filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
     filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
 
-    filenames.extend(["ChArUco Quad 7m run1"])
+    filenames.extend(["ChArUco Quad 2m run1"])
 
     filepaths = [f"recordings/{name}.json" for name in filenames]
     processor = DataProcessor(filepaths)
@@ -962,14 +962,14 @@ if __name__ == "__main__":
 
 
     # Time correction variables
-    marker_unit = 4 #0, 1, 2, 3. 4 is the average
-    display_all = 1
+    marker_unit = 4 #0, 1, 2, 3. 4 is the average of the others.
+    display_all = 0
     rising_edge = 1
-    normalize_data = False
     offset_encoder = False
+    replace_erronious_pos = True
     time_correction = 638.00 # Time correction in ms for camera data
-    flip_around_point = False #-2.680 # Set to False to disable
     auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
+    camera_pos_offset_ref = 1.3895 # Expected camera y-position offset in meters, based on quad marker data
 
 
     MARKERS_Z_LEVEL = -0.3+0.1124
@@ -988,6 +988,7 @@ if __name__ == "__main__":
     ]
     quad_marker_rot = [[0,0,90], [0,0,180], [0,0,0], [0,0,90]]
 
+    # Modify data that is erronious
     for data in processor.data:
         if data['mpu_unit'] == 4:
             average_pos = []
@@ -997,20 +998,25 @@ if __name__ == "__main__":
                     continue
 
                 marker_order = [[0,1], [1,1], [2,1], [3,1]] # NOT ALL CORRECT
-                (camera_pos, camera_rot), error_scores = manta.alter_to_correct_pose(
-                    data['camera_pos_'+str(marker_idx)]['position'],
-                    data['camera_pos_'+str(marker_idx)]['rotation'],
-                    [quad_marker_pos[marker_order[marker_idx][0]], quad_marker_rot[marker_order[marker_idx][1]]]
-                )
+                corrected_pose = False
+                if replace_erronious_pos:
+                    (camera_pos, camera_rot), error_scores, corrected_pose = manta.alter_to_correct_pose(
+                        data['camera_pos_'+str(marker_idx)]['position'],
+                        data['camera_pos_'+str(marker_idx)]['rotation'],
+                        [quad_marker_pos[marker_order[marker_idx][0]], quad_marker_rot[marker_order[marker_idx][1]]]
+                    )
 
-                data['camera_pos_'+str(marker_idx)]['position'] = camera_pos
-                data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
-                average_pos.append(camera_pos)
-                average_rot.append(camera_rot)
+                    if corrected_pose:
+                        data['camera_pos_'+str(marker_idx)]['position'] = camera_pos
+                        data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
+                    
+                    # Notify if the error values are too similar to each other
+                    if abs(error_scores[0] - error_scores[1]) < 0.1:
+                        print(f"Warning: Error values for marker {marker_idx} at timestamp {data['camera']['timestamp']} are too similar: {error_scores[0]} and {error_scores[1]}")
 
-                # Notify if the error values are too similar to each other
-                if abs(error_scores[0] - error_scores[1]) < 0.1:
-                    print(f"Warning: Error values for marker {marker_idx} at timestamp {data['camera']['timestamp']} are too similar: {error_scores[0]} and {error_scores[1]}")
+                average_pos.append(data['camera_pos_'+str(marker_idx)]['position'])
+                average_rot.append(data['camera_pos_'+str(marker_idx)]['rotation'])
+
             if len(average_pos) > 0:
                 average_pos = np.mean(np.stack(average_pos, axis=0), axis=0)
                 average_rot = np.mean(np.stack(average_rot, axis=0), axis=0)
@@ -1018,7 +1024,10 @@ if __name__ == "__main__":
                     'position': average_pos,
                     'rotation': average_rot
             }
-
+                
+    #extracted = processor.extract_all_data()
+    #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
+    #plt.show(block=True)
 
     # Get the offset from zero for the camera data by averaging all values within the first 1000ms
     camera_data = []
@@ -1034,9 +1043,6 @@ if __name__ == "__main__":
             if initial_timestamp is None:
                 initial_timestamp = data['camera']['timestamp']
             
-            if flip_around_point is not False and data['camera_pos_'+str(marker_unit)]['position'][1] < flip_around_point + 1.3757:
-                data['camera_pos_'+str(marker_unit)]['position'][1] = flip_around_point - data['camera_pos_'+str(marker_unit)]['position'][1]
-
             if data['camera']['timestamp'] - initial_timestamp < 1000:
                 camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
             else:
@@ -1051,35 +1057,11 @@ if __name__ == "__main__":
     if camera_data:
         camera_data = np.array(camera_data)
 
-        if normalize_data:
-            ref_data = np.array(ref_data)
-            camera_data_ext = np.append(camera_data, camera_data_ext)
-            camera_data = (camera_data - np.mean(camera_data)) / np.std(camera_data)  # Z-score normalization
-            camera_data_ext = (camera_data_ext - np.mean(camera_data_ext)) / np.std(camera_data_ext)  # Z-score normalization  
-            ref_data = (ref_data - np.mean(ref_data)) / np.std(ref_data)  # Z-score normalization
-
-        camera_pos_offset = np.mean(camera_data, axis=0) if not normalize_data else 0
+        camera_pos_offset = np.mean(camera_data, axis=0)
         print(f"\nCamera position offset: {camera_pos_offset:2.4f} +- {np.std(camera_data, axis=0):.5f} (# vals: {len(camera_data)})")
-        if abs(camera_pos_offset-1.2743) > 0.1:
-            print("Warning: Camera position offset is significantly different from expected value (1.2743m). Using the expected value instead.")
-            camera_pos_offset = 1.2743
-    
-        # Set the normalized data
-        if normalize_data:
-            camera_data = camera_data_ext
-            data_int = 0
-            ref_int = 0
-            for data in processor.data:
-                if data['mpu_unit'] == 4:
-                    if 'camera_pos_'+str(marker_unit) not in data:
-                        continue
-                    data['camera_pos_'+str(marker_unit)]['position'][1] = camera_data[data_int]
-                    data_int += 1
-                if data['mpu_unit'] == 0:
-                    if 'encoder' not in data:
-                        continue
-                    data['encoder']['distance'] = ref_data[ref_int]
-                    ref_int += 1
+        if abs(camera_pos_offset-camera_pos_offset_ref) > 0.1:
+            print(f"Warning: Camera position offset is significantly different from expected value ({camera_pos_offset_ref}m). Using the expected value instead.")
+            camera_pos_offset = camera_pos_offset_ref
 
         camera_data = np.append(camera_data, np.array(camera_data_ext))
         if offset_encoder:
