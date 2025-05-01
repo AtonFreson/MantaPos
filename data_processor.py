@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 from collections import defaultdict
 import mantaPosLib as manta
 import os
-import pprint
 import datetime
 import numpy as np
 import warnings
@@ -879,22 +879,27 @@ class DataProcessor:
                     for i in range(y_data.shape[1]):
                         if negative:
                             y_data[:, i] = -y_data[:, i]
-                        if field == 'timestamps_shifted':
-                            # Add aditional data for camera and reference if requested
-                            if ref_timestamps is not None and ref_data is not None:
-                                ax.plot(ref_timestamps, ref_data, marker='.', markersize=2, linestyle='-')
-                            if all_camera_timestamps is not None and all_camera_data is not None:
-                                for i in range(5):
-                                    if len(all_camera_data[i]) > 0 and int(sensor[-1]) != i:
-                                        ax.plot(all_camera_timestamps[i], all_camera_data[i], marker='.', markersize=2, linestyle='-')
 
+                        # Add aditional data for camera and reference if requested
+                        if i == 0 and ref_timestamps is not None and ref_data is not None:
+                            ax.plot(ref_timestamps, ref_data, marker='.', markersize=2, linestyle='-',
+                                    label=f"reference - position_y")
+                        if i == 0 and all_camera_timestamps is not None and all_camera_data is not None:
+                            for k in range(5):
+                                if len(all_camera_data[k]) > 0 and int(sensor[-1]) != k:
+                                    ax.plot(all_camera_timestamps[k], all_camera_data[k], linestyle='-', alpha=0.4,
+                                            label=f"{mpu_key} (camera_pos_{'avg' if k==4 else k}) - {field}_y")
+
+                        if field == 'timestamps_shifted':
                             ax.plot(y_data[:, 1], y_data[:, 0], marker='.', markersize=2, linestyle='-')
                             for j in range(2, y_data.shape[1]):
                                 ax.plot(y_data[:, j], y_data[:, 0], marker='.', markersize=2, linestyle='-', alpha=0.03)
                         else:
                             if i < len(vals):
+                                if ref_timestamps is not None and ref_data is not None:
+                                    continue
                                 ax.plot(timestamps, y_data[:, i], marker='.', markersize=2, linestyle='-',
-                                        label=f"{mpu_key} ({sensor}) - {field}_{vals[i] if y_data.shape[1]<=len(vals) else i}")
+                                        label=f"{mpu_key} ({'camera_pos_avg' if sensor[-1]=='4' else sensor}) - {field}_{vals[i] if y_data.shape[1]<=len(vals) else i}")
                             else:
                                 ax.plot(timestamps, y_data[:, i], marker='.', markersize=2, linestyle='-')
                 else:
@@ -902,10 +907,10 @@ class DataProcessor:
                         y_data = -y_data
                     ax.plot(timestamps, y_data, marker='.', markersize=2, linestyle='-',
                             label=f"{mpu_key} ({sensor}) - {field}")
-                ax.set_title(f"{mpu_key}.{sensor}.{field}")
-                ax.set_ylabel("Value")
+                ax.set_title(f"{mpu_key}.{sensor[:-1]+'avg' if sensor[-1]=='4' else sensor}.{field}")
+                ax.set_ylabel("Value (m)")
                 ax.legend()
-                ax.xaxis.set_major_locator(plt.MaxNLocator(24))
+                ax.xaxis.set_major_locator(plt.MaxNLocator(30))
                 ax.yaxis.set_major_locator(plt.MaxNLocator(12))
                 ax.minorticks_on()
                 ax.grid(True, which='major', linestyle='-', linewidth=0.8, alpha=0.7)
@@ -913,8 +918,13 @@ class DataProcessor:
                 ax.spines['top'].set_visible(True)
                 ax.spines['right'].set_visible(True)
                 ax.tick_params(which='both', top=True, right=True)
+
+                # Set x-axis indicators to scientific notation at full seconds level
+                formatter = mticker.ScalarFormatter(useMathText=True)
+                formatter.set_powerlimits((3, 3))
+                ax.xaxis.set_major_formatter(formatter)
                 
-            axes[-1].set_xlabel("Timestamp")
+            axes[-1].set_xlabel("Timestamp (display: s, data: ms)")
             plt.tight_layout()
             plt.show(block=False)
 
@@ -1206,7 +1216,8 @@ if __name__ == "__main__":
             for i in range(5):
                 if 'camera_pos_'+str(i) not in data:
                     continue
-                all_camera_data[i].append(data['camera_pos_'+str(i)]['position'][1] - camera_pos_offset)
+                offset = 0 if i == 4 else camera_pos_offset
+                all_camera_data[i].append(data['camera_pos_'+str(i)]['position'][1] - offset)
                 all_camera_timestamps_corrected[i].append(data['camera']['timestamp'] + time_correction)
     
 
