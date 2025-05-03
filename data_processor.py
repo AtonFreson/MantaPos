@@ -908,7 +908,7 @@ class DataProcessor:
                     ax.plot(timestamps, y_data, marker='.', markersize=2, linestyle='-',
                             label=f"{mpu_key} ({sensor}) - {field}")
                 ax.set_title(f"{mpu_key}.{sensor[:-1]+'avg' if sensor[-1]=='4' else sensor}.{field}")
-                ax.set_ylabel("Value (m)")
+                ax.set_ylabel("Value")
                 ax.legend()
                 ax.xaxis.set_major_locator(plt.MaxNLocator(30))
                 ax.yaxis.set_major_locator(plt.MaxNLocator(12))
@@ -954,7 +954,20 @@ if __name__ == "__main__":
     filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
     filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
 
-    filenames.extend(["ChArUco Quad 2m run1"])
+    filenames.extend(["ChArUco Quad 7m run1"])
+    #filenames.extend(["altered/ChArUco Quad 7m run1"])
+
+    # Time correction variables
+    marker_unit = 4 #0, 1, 2 or 3. Use 4 for the average of the others.
+    display_all = 0
+    rising_edge = 1
+    offset_encoder = False
+    replace_erronious_pos = True
+    time_correction = 638.00 # Time correction in ms for camera data
+    save_altered_data = False # Save altered data to file 
+    auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
+    camera_pos_offset_ref = 1.3895 # Expected camera y-position offset in meters, based on quad marker data
+
 
     filepaths = [f"recordings/{name}.json" for name in filenames]
     processor = DataProcessor(filepaths)
@@ -967,19 +980,9 @@ if __name__ == "__main__":
             data['camera']['timestamp'] = averaged_timestamps[timestamp_lines]
             timestamp_lines += 1
     if timestamp_lines != len(averaged_timestamps):
-        print("Warning: Mismatch in camera timestamps and averaged timestamps count.")
+        print("Warning: Mismatch in camera timestamps and averaged timestamps count. Stopping the process.")
         exit(1)
 
-
-    # Time correction variables
-    marker_unit = 4 #0, 1, 2, 3. 4 is the average of the others.
-    display_all = 0
-    rising_edge = 1
-    offset_encoder = False
-    replace_erronious_pos = True
-    time_correction = 638.00 # Time correction in ms for camera data
-    auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
-    camera_pos_offset_ref = 1.3895 # Expected camera y-position offset in meters, based on quad marker data
 
 
     MARKERS_Z_LEVEL = -0.3+0.1124
@@ -998,11 +1001,14 @@ if __name__ == "__main__":
     ]
     quad_marker_rot = [[0,0,90], [0,0,180], [0,0,0], [0,0,90]]
 
+    modified_camera_data = []
     # Modify data that is erronious
     for data in processor.data:
         if data['mpu_unit'] == 4:
             average_pos = []
             average_rot = []
+            modified_camera_data.append([data['recv_time'], int(data['camera']['timestamp'] + round(time_correction)), 
+                                        [None, None, None, None], [None, None, None, None]])
             for marker_idx in range(4):
                 if 'camera_pos_'+str(marker_idx) not in data:
                     continue
@@ -1017,8 +1023,16 @@ if __name__ == "__main__":
                     )
 
                     if corrected_pose:
+                        # Shift rotational calculation error
+                        for i in range(3):
+                            if camera_rot[i] > 90:
+                                camera_rot[i] -= 180
+                            elif camera_rot[i] < -90:
+                                camera_rot[i] += 180
                         data['camera_pos_'+str(marker_idx)]['position'] = camera_pos
                         data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
+                        modified_camera_data[-1][2][marker_idx] = camera_pos.tolist()
+                        modified_camera_data[-1][3][marker_idx] = camera_rot.tolist()
                     
                     # Notify if the error values are too similar to each other
                     if abs(error_scores[0] - error_scores[1]) < 0.1:
@@ -1120,7 +1134,7 @@ if __name__ == "__main__":
             std_vals.append([i, np.std(pos_diff)])
 
             processor.data.append({
-                'mpu_unit': 5,
+                'mpu_unit': 6,
                 'auto-diff_vs_offset': {
                     'timestamp': i,
                     'mean': np.mean(pos_diff),
@@ -1221,6 +1235,39 @@ if __name__ == "__main__":
                 all_camera_timestamps_corrected[i].append(data['camera']['timestamp'] + time_correction)
     
 
+    # Save altered camera data to a file based on the original data file
+    if len(filepaths) == 1 and 'altered' not in filepaths[0] and save_altered_data:
+        altered_filepath = filepaths[0].split('/')[0] + '/altered/' + filepaths[0].split('/')[1]
+        altered_file = open(altered_filepath, 'w', encoding='utf-8')
+        with open(filepaths[0], 'r', encoding='utf-8') as f:
+            for line in f:
+                altered_file.write(line)
+                if '"mpu_unit": 4' in line:
+                    line_json = json.loads(line)
+                    line_json['mpu_unit'] = 5
+
+                    # Find the matching entry in modified_camera_data
+                    try:
+                        idx = next(i for i, row in enumerate(modified_camera_data) if row[0] == line_json['recv_time'])
+                    except StopIteration:
+                        print("Warning: No matching timestamp found for the camera data. Stopping the process.")
+                        exit(1)
+
+                    line_json['camera']['timestamp'] = modified_camera_data[idx][1]
+                    for marker_idx in range(4):
+                        if 'camera_pos_'+str(marker_idx) not in line_json:
+                            if modified_camera_data[idx][2][marker_idx] is not None:
+                                print(f"Warning: camera_pos_{marker_idx} not found in the original data, but found in the modified data. Stopping the process.")
+                                exit(1)
+                        else:
+                            line_json['camera_pos_'+str(marker_idx)]['position'] = modified_camera_data[idx][2][marker_idx]
+                            line_json['camera_pos_'+str(marker_idx)]['rotation'] = modified_camera_data[idx][3][marker_idx]
+                    
+                    altered_file.write(json.dumps(line_json) + '\n')
+                
+        altered_file.close()
+        print(f"Altered data saved to {altered_filepath}")
+
 
     extracted = processor.extract_all_data()
 
@@ -1245,12 +1292,13 @@ if __name__ == "__main__":
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
 
     if display_all:
-        processor.visualize(mpu_units=[5], sensor_types=['auto-diff_vs_offset'], fields=['std'])
+        processor.visualize(mpu_units=[6], sensor_types=['auto-diff_vs_offset'], fields=['std'])
         processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], 
                             fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
     processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
                         ref_timestamps = ref_timestamps, ref_data = -1*np.array(ref_data), 
                         all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)
+    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], fields=['rotation'])
     
     # Run matplotlib event loop to keep the plots open
     plt.show(block=True)
