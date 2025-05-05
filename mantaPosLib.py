@@ -704,16 +704,46 @@ def inverse_calculate_camera_position(camera_position, camera_rotation, marker_p
 
     return tvec, rvec
 
-    # Correct version, but not working..?
-    '''# Invert global pose to get marker-to-camera pose for solvePnP
-    # Compute rotation from marker to camera
-    R_marker_camera = R_camera_global.T @ R_marker_global
-    # Compute translation from marker to camera
-    t_marker_camera = R_camera_global.T @ (t_marker_global - t_camera_global)
-    # Convert rotation matrix to rotation vector for solvePnP
-    rvec, _ = cv2.Rodrigues(R_marker_camera)
-    # Return translation vector and rotation vector
-    return t_marker_camera.flatten(), rvec.flatten()'''
+def inverse_calculate_camera_position2(camera_position, camera_rotation, marker_pos_rot):
+    """
+    Inverse of calculate_camera_position: computes (tvec, rvec) such that
+        X_cam = R_marker2cam @ X_marker + t_marker2cam
+    reproduces the given global camera pose.
+
+    Args:
+        camera_position: array-like, shape (3,)
+            [x, y, z] of camera in GLOBAL coords (in metres).
+        camera_rotation: array-like, shape (3,)
+            [roll, pitch, yaw] of camera in GLOBAL coords (degrees, 'xyz').
+        marker_pos_rot: tuple (marker_pos, marker_rot)
+            marker_pos: array-like (3,) of marker in GLOBAL coords (metres)
+            marker_rot: array-like (3,) of marker Euler (deg, 'xyz') in GLOBAL
+
+    Returns:
+        tvec: (3,1) translation vector from marker→camera (to feed solvePnP)
+        rvec: (3,1) Rodrigues rotation vector marker→camera
+    """
+    # unpack
+    marker_pos, marker_rot = marker_pos_rot
+
+    # 1) build GLOBAL→MARKER pose
+    R_MG = R.from_euler('xyz', marker_rot, degrees=True).as_matrix()  # marker→global
+    t_MG = np.asarray(marker_pos).reshape(3,1)
+
+    # 2) build GLOBAL→CAMERA pose
+    R_CG = R.from_euler('xyz', camera_rotation, degrees=True).as_matrix()  # cam→global
+    t_CG = np.asarray(camera_position).reshape(3,1)
+
+    # ---- invert the forward transform ----
+    # rotation: R_marker→camera = (R_camera→global)^T * (R_marker→global)
+    R_MC = R_MG.T @ R_CG
+    rvec, _ = cv2.Rodrigues(R_MC)
+
+    # translation: t_marker→camera = R_CG^T * (t_MG - t_CG)
+    tvec = R_MG.T @ (t_CG - t_MG)
+
+    return tvec, rvec
+
 
 # Function to choose the correct pose from solvePnP for a planar ArUco marker
 def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
@@ -726,7 +756,7 @@ def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
     aligns with camera_dir_known.
     """
     # Get rvec and tvec from the camera position and rotation
-    tvec, rvec = inverse_calculate_camera_position(camera_position, camera_rotation, marker_pos_rot)
+    tvec, rvec = inverse_calculate_camera_position2(camera_position, camera_rotation, marker_pos_rot)
     
     #camera_position_2, camera_rotation_2 = calculate_camera_position(tvec, rvec, marker_pos_rot)
     #print(f"diff: {np.linalg.norm(camera_position - camera_position_2):.3f}m, {np.linalg.norm(camera_rotation - camera_rotation_2):.3f}°")
@@ -736,7 +766,7 @@ def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
 
     # 2) Build the “flipped” solution: R2 = R·diag(-1, -1, 1), t2 = –t
     flip = np.diag([-1, -1, 1])
-    R2 = R.dot(flip)
+    R2 = R @ flip
     rvec2, _ = cv2.Rodrigues(R2)
     tvec2     = -tvec
 
@@ -755,7 +785,7 @@ def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
     score_trans1 = float(np.dot(v1n, camera_dir_known))
     score_trans2 = float(np.dot(v2n, camera_dir_known))
 
-    # 4) Combine scores (you can weight these as you like; here equal weight)
+    # 4) Combine scores
     total1 = score_rot1 + score_trans1
     total2 = score_rot2 + score_trans2
 

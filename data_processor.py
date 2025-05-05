@@ -1013,7 +1013,7 @@ if __name__ == "__main__":
                 if 'camera_pos_'+str(marker_idx) not in data:
                     continue
 
-                marker_order = [[0,1], [1,1], [2,1], [3,1]] # NOT ALL CORRECT
+                marker_order = [[0,1], [1,1], [2,1], [3,1]] # LIKELY NOT ALL CORRECT
                 corrected_pose = False
                 if replace_erronious_pos:
                     (camera_pos, camera_rot), error_scores, corrected_pose = manta.alter_to_correct_pose(
