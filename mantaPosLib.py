@@ -735,6 +735,224 @@ def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
         return calculate_camera_position(tvec2, rvec2, marker_pos_rot), [total1, total2], True
     return (None, None), [total1, total2], False
 
+
+
+
+
+
+
+# Function to calculate the translation vector (tvec) and rotation vector (rvec)
+# for the marker in camera coordinates, given the global camera pose and global marker pose.
+def inverse_calculate_camera_position2(camera_position_global, camera_rotation_global_deg, marker_pos_rot_global):
+    marker_pos_global, marker_rot_global_deg = marker_pos_rot_global
+
+    # Marker pose in global coordinates
+    R_marker_global = R.from_euler('xyz', marker_rot_global_deg, degrees=True).as_matrix()
+    t_marker_global = np.asarray(marker_pos_global).reshape(3,1)
+
+    # Camera pose in global coordinates
+    R_camera_global = R.from_euler('xyz', camera_rotation_global_deg, degrees=True).as_matrix()
+    t_camera_global = np.asarray(camera_position_global).reshape(3,1)
+
+    # Calculate marker pose in camera coordinates (what solvePnP returns)
+    # R_marker_in_camera = R_camera_global_inv @ R_marker_global
+    # t_marker_in_camera = R_camera_global_inv @ (t_marker_global - t_camera_global)
+    
+    R_marker_in_camera = R_camera_global.T @ R_marker_global
+    t_marker_in_camera = R_camera_global.T @ (t_marker_global - t_camera_global)
+
+    rvec_marker_in_camera, _ = cv2.Rodrigues(R_marker_in_camera)
+    
+    return t_marker_in_camera, rvec_marker_in_camera
+
+# Function to calculate the global camera pose
+# given the marker's pose in camera coordinates (tvec, rvec) and the marker's global pose.
+def calculate_camera_position2(tvec_marker_in_camera, rvec_marker_in_camera, marker_pos_rot_global):
+    # print(f"\n  --- calculate_camera_position ---") # Debug
+    # print(f"    Input tvec (marker in cam): {tvec_marker_in_camera.flatten().round(4)}") # Debug
+    # print(f"    Input rvec (marker in cam): {rvec_marker_in_camera.flatten().round(4)}") # Debug
+
+    marker_pos_global, marker_rot_global_deg = marker_pos_rot_global
+    # print(f"    Input marker_pos_global: {np.array(marker_pos_global).round(4)}") # Debug
+    # print(f"    Input marker_rot_global_deg: {np.array(marker_rot_global_deg).round(4)}") # Debug
+        
+    # Convert rvec (marker in camera) to rotation matrix
+    R_marker_in_camera, _ = cv2.Rodrigues(rvec_marker_in_camera)
+    t_marker_in_camera_col = tvec_marker_in_camera.reshape((3, 1))
+    # print(f"    R_marker_in_camera (from rvec):\n{R_marker_in_camera.round(4)}") # Debug
+
+    # Invert the transformation to get pose of camera in marker's coordinate system
+    R_camera_in_marker = R_marker_in_camera.T
+    t_camera_in_marker = -R_marker_in_camera.T @ t_marker_in_camera_col
+    # print(f"    R_camera_in_marker:\n{R_camera_in_marker.round(4)}") # Debug
+    # print(f"    t_camera_in_marker: {t_camera_in_marker.flatten().round(4)}") # Debug
+
+    # Get marker's pose in global coordinates (Rotation matrix and translation vector)
+    R_marker_global = R.from_euler('xyz', marker_rot_global_deg, degrees=True).as_matrix()
+    t_marker_global_col = np.array(marker_pos_global).reshape((3, 1))
+    # print(f"    R_marker_global:\n{R_marker_global.round(4)}") # Debug
+    # print(f"    t_marker_global_col: {t_marker_global_col.flatten().round(4)}") # Debug
+
+    # Compute camera pose in global coordinates
+    # R_camera_global = R_marker_global @ R_camera_in_marker
+    # t_camera_global = R_marker_global @ t_camera_in_marker + t_marker_global_col
+    R_camera_global = R_marker_global @ R_camera_in_marker
+    t_camera_global = t_marker_global_col + (R_marker_global @ t_camera_in_marker) # Original formula was P_world = R_world_marker * P_marker_local + T_world_marker
+                                                                             # So, CamPos_glob = R_marker_glob @ CamPos_marker + MarkerPos_glob
+
+    # print(f"    R_camera_global:\n{R_camera_global.round(4)}") # Debug
+    # print(f"    t_camera_global: {t_camera_global.flatten().round(4)}") # Debug
+
+    # Convert global camera rotation matrix to Euler angles (in degrees)
+    euler_angles_camera_global = R.from_matrix(R_camera_global).as_euler('xyz', degrees=True)
+    # print(f"    Output euler_angles_camera_global: {euler_angles_camera_global.round(4)}") # Debug
+
+    return t_camera_global.flatten(), euler_angles_camera_global
+
+def alter_to_correct_pose2(camera_position_global_input, camera_rotation_global_input_deg, 
+                        marker_pos_rot_global,
+                        marker_normal_expected_in_cam=np.array([0, 0, 1.0], dtype=float),
+                        debug_prints=False):
+    """
+    Given an estimated global camera pose, and the known global pose of a marker,
+    this function calculates the two ambiguous poses for the marker in camera coordinates.
+    It then selects the one whose marker normal (Z-axis in camera coords) best aligns
+    with `marker_normal_expected_in_cam`.
+    Finally, it returns the global camera pose corresponding to the selected marker pose.
+
+    Parameters:
+    - camera_position_global_input: Current estimated global position of the camera.
+    - camera_rotation_global_input_deg: Current estimated global rotation (Euler XYZ, degrees) of the camera.
+    - marker_pos_rot_global: A list/tuple `[marker_pos_global, marker_rot_global_deg]`
+                             - marker_pos_global: Global position [x,y,z] of the marker.
+                             - marker_rot_global_deg: Global rotation (Euler XYZ, degrees) of the marker.
+    - marker_normal_expected_in_cam: Expected direction of the marker's Z-axis in camera coordinates.
+                                     Default is [0,0,1] (marker's Z-axis points towards camera's +Z axis).
+    - debug_prints: If True, enables detailed print statements for debugging.
+
+    Returns:
+    - A tuple: ( (corrected_camera_pos_global, corrected_camera_rot_global_deg),
+                  [score_orig, score_alt],
+                  was_flipped_flag )
+        - corrected_camera_pos_global: The chosen global camera position.
+        - corrected_camera_rot_global_deg: The chosen global camera rotation (Euler XYZ, degrees).
+        - [score_orig, score_alt]: Dot product scores for original and alternate poses.
+        - was_flipped_flag: Boolean, True if the alternate pose was chosen, False otherwise.
+    """
+    
+    if debug_prints:
+        print(f"\n--- alter_to_correct_pose (Verbose) ---")
+        print(f"Input camera_position_global: {np.array(camera_position_global_input).round(4)}")
+        print(f"Input camera_rotation_global_deg: {np.array(camera_rotation_global_input_deg).round(4)}")
+        print(f"Input marker_pos_global: {np.array(marker_pos_rot_global[0]).round(4)}")
+        print(f"Input marker_rot_global_deg: {np.array(marker_pos_rot_global[1]).round(4)}")
+        print(f"marker_normal_expected_in_cam: {marker_normal_expected_in_cam.round(4)}")
+
+    # 1. Calculate the marker's pose in camera coordinates (tvec_orig, rvec_orig)
+    #    based on the input global camera pose and the known global marker pose.
+    tvec_m_in_c_orig, rvec_m_in_c_orig = inverse_calculate_camera_position2(
+        camera_position_global_input,
+        camera_rotation_global_input_deg,
+        marker_pos_rot_global
+    )
+
+    # For consistency and to verify calculations, recalculate the input global camera pose
+    # from this tvec_m_in_c_orig. This should ideally match the input.
+    cam_pos_recalc_from_orig, cam_rot_recalc_from_orig_deg = calculate_camera_position2(
+        tvec_m_in_c_orig, rvec_m_in_c_orig, marker_pos_rot_global
+    )
+
+    if debug_prints:
+        print(f"  tvec_m_in_c_orig (marker in cam): {tvec_m_in_c_orig.flatten().round(4)}")
+        print(f"  rvec_m_in_c_orig (marker in cam): {rvec_m_in_c_orig.flatten().round(4)}")
+        pos_diff = np.linalg.norm(np.array(camera_position_global_input) - np.array(cam_pos_recalc_from_orig))
+        # More careful Euler angle difference (e.g. handle wrap-around if necessary)
+        rot_diff_euler = np.abs(np.array(camera_rotation_global_input_deg) - np.array(cam_rot_recalc_from_orig_deg))
+        print(f"  Recalculated global cam_pos_from_orig: {np.array(cam_pos_recalc_from_orig).round(4)}")
+        print(f"  Recalculated global cam_rot_from_orig_deg: {np.array(cam_rot_recalc_from_orig_deg).round(4)}")
+        print(f"  Pos diff (input vs recalc_from_orig): {pos_diff:.6f}")
+        print(f"  Rot diff euler (input vs recalc_from_orig): {rot_diff_euler.round(4)}")
+        if pos_diff > 1e-3 or np.any(rot_diff_euler > 1e-2):
+             print(f"    WARNING: Significant round trip diff for original pose detected!")
+    
+    # Rotation matrix for the original marker pose in camera coordinates
+    R_m_in_c_orig, _ = cv2.Rodrigues(rvec_m_in_c_orig)
+
+    # 2. Determine the alternate ambiguous pose for the marker in camera coordinates.
+    #    A common ambiguity for planar markers involves a 180-degree rotation
+    #    around one of the marker's in-plane axes (e.g., its local Y-axis).
+    #    R_y_180_marker_frame rotates around the marker's own Y axis.
+    R_y_180_marker_frame = np.array([[-1.0, 0.0,  0.0],
+                                     [ 0.0, 1.0,  0.0],
+                                     [ 0.0, 0.0, -1.0]])
+    
+    R_m_in_c_alt = R_m_in_c_orig @ R_y_180_marker_frame
+    rvec_m_in_c_alt, _ = cv2.Rodrigues(R_m_in_c_alt)
+    # The translation vector tvec is typically the same for this type of ambiguity.
+    tvec_m_in_c_alt = tvec_m_in_c_orig
+
+    if debug_prints:
+        R_m_in_c_orig_for_print = R_m_in_c_orig if 'R_m_in_c_orig' in locals() else "Not computed"
+        print(f"  R_m_in_c_orig:\n{R_m_in_c_orig_for_print if isinstance(R_m_in_c_orig_for_print, str) else R_m_in_c_orig_for_print.round(4)}")
+        print(f"  R_m_in_c_alt:\n{R_m_in_c_alt.round(4)}")
+
+    # 3. Score both poses based on the marker's Z-axis direction in camera coordinates.
+    #    The marker's Z-axis in camera coordinates is the 3rd column of R_m_in_c.
+    normal_orig_in_cam = R_m_in_c_orig[:, 2]
+    normal_alt_in_cam = R_m_in_c_alt[:, 2] # Should be R_m_in_c_orig @ [0,0,-1].T if R_y_180 applied correctly
+
+    score_orig = float(np.dot(normal_orig_in_cam, marker_normal_expected_in_cam))
+    score_alt = float(np.dot(normal_alt_in_cam, marker_normal_expected_in_cam))
+
+    if debug_prints:
+        print(f"  normal_orig_in_cam (R_m_in_c_orig[:,2]): {normal_orig_in_cam.round(4)}")
+        print(f"  normal_alt_in_cam  (R_m_in_c_alt[:,2]): {normal_alt_in_cam.round(4)}") # Should be different Z than normal_orig
+        print(f"  Score Original: {score_orig:.4f}")
+        print(f"  Score Alternate: {score_alt:.4f}") # Should typically have opposite sign to score_orig
+
+    # 4. Choose the pose with the better score (higher dot product indicates better alignment).
+    #    And calculate the corresponding global camera pose.
+    was_flipped_flag: bool
+    chosen_tvec_m_in_c: np.ndarray
+    chosen_rvec_m_in_c: np.ndarray
+
+    if score_alt > score_orig:
+        if debug_prints: print("    Decision: Choosing ALTERNATE marker pose.")
+        chosen_tvec_m_in_c = tvec_m_in_c_alt
+        chosen_rvec_m_in_c = rvec_m_in_c_alt
+        was_flipped_flag = True
+        # The global camera pose will be derived from this chosen alternate marker-in-camera pose.
+        # If original input was "bad", and this flips it, this path is taken.
+    else:
+        if debug_prints: print("    Decision: Choosing ORIGINAL marker pose (as recalculated from tvec_m_in_c_orig).")
+        chosen_tvec_m_in_c = tvec_m_in_c_orig
+        chosen_rvec_m_in_c = rvec_m_in_c_orig
+        was_flipped_flag = False
+        # The global camera pose will be the one consistent with tvec_m_in_c_orig.
+        # This effectively means using cam_pos_recalc_from_orig, cam_rot_recalc_from_orig_deg.
+
+    # Calculate the chosen global camera pose
+    # This step ensures that even if the original input global camera pose had slight inconsistencies
+    # with its derived marker-in-camera pose, the output global camera pose is strictly
+    # derived from a consistent marker-in-camera pose (either original-derived or alternate).
+    final_camera_pos_global, final_camera_rot_global_deg = calculate_camera_position2(
+        chosen_tvec_m_in_c, chosen_rvec_m_in_c, marker_pos_rot_global
+    )
+    
+    if debug_prints:
+        print(f"  Chosen tvec_m_in_c: {chosen_tvec_m_in_c.flatten().round(4)}")
+        print(f"  Chosen rvec_m_in_c: {chosen_rvec_m_in_c.flatten().round(4)}")
+        print(f"  Final Output camera_pos_global: {np.array(final_camera_pos_global).round(4)}")
+        print(f"  Final Output camera_rot_global_deg: {np.array(final_camera_rot_global_deg).round(4)}")
+        print(f"  Was Flipped: {was_flipped_flag}")
+
+    return (final_camera_pos_global, final_camera_rot_global_deg), [score_orig, score_alt], was_flipped_flag
+
+
+
+
+
+
 # Function to display the position and orientation of the camera in the global coordinate system
 def display_camera_position(frame, position, rotation, ref_pos, ref_rot, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.8, 
                             text_color=(0, 255, 0), thickness=1, alpha=0.65, rect_padding=(10, 10, 600, 150)):
