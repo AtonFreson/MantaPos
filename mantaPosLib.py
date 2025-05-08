@@ -665,65 +665,6 @@ def calculate_camera_position(tvec, rvec, marker_pos_rot):
 # Function to calculate the translation vector (tvec) and rotation vector (rvec) for solvePnP
 # given the global camera pose and marker pose.
 def inverse_calculate_camera_position(camera_position, camera_rotation, marker_pos_rot):
-    """
-    Inverse of calculate_camera_position: computes the translation vector (tvec) and rotation vector (rvec)
-    for solvePnP given the global camera pose and marker pose.
-
-    Parameters:
-        camera_position (array-like): Global camera position [x, y, z].
-        camera_rotation (array-like): Global camera Euler angles [roll, pitch, yaw] in degrees.
-        marker_pos_rot (tuple): Marker global pose ((x, y, z), (roll, pitch, yaw)) in meters and degrees.
-
-    Returns:
-        tvec (numpy.ndarray): Translation vector from marker to camera (3x1).
-        rvec (numpy.ndarray): Rotation vector (Rodrigues) from marker to camera (3x1).
-    """
-    # Extract marker pose
-    marker_pos, marker_rot = marker_pos_rot
-    # Compute marker-to-global rotation matrix
-    roll_m, pitch_m, yaw_m = np.deg2rad(marker_rot)
-    R_marker_global = R.from_euler('xyz', [roll_m, pitch_m, yaw_m]).as_matrix()
-    t_marker_global = np.array(marker_pos).reshape((3, 1))
-
-    # Compute global camera rotation and translation
-    roll_c, pitch_c, yaw_c = np.deg2rad(camera_rotation)
-    R_camera_global = R.from_euler('xyz', [roll_c, pitch_c, yaw_c]).as_matrix()
-    t_camera_global = np.array(camera_position).reshape((3, 1))
-
-
-    # Compute rotation from marker to camera
-    R_camera_marker = R_marker_global.T @ R_camera_global
-    R_marker_camera = R_camera_marker.T
-
-    # Compute translation from marker to camera
-    t_camera_marker = R_marker_global.T @ (t_camera_global - t_marker_global)
-
-    # Convert rotation matrix to rotation vector
-    rvec, _ = cv2.Rodrigues(R_marker_camera)
-    tvec = t_camera_marker
-
-    return tvec, rvec
-
-def inverse_calculate_camera_position2(camera_position, camera_rotation, marker_pos_rot):
-    """
-    Inverse of calculate_camera_position: computes (tvec, rvec) such that
-        X_cam = R_marker2cam @ X_marker + t_marker2cam
-    reproduces the given global camera pose.
-
-    Args:
-        camera_position: array-like, shape (3,)
-            [x, y, z] of camera in GLOBAL coords (in metres).
-        camera_rotation: array-like, shape (3,)
-            [roll, pitch, yaw] of camera in GLOBAL coords (degrees, 'xyz').
-        marker_pos_rot: tuple (marker_pos, marker_rot)
-            marker_pos: array-like (3,) of marker in GLOBAL coords (metres)
-            marker_rot: array-like (3,) of marker Euler (deg, 'xyz') in GLOBAL
-
-    Returns:
-        tvec: (3,1) translation vector from marker→camera (to feed solvePnP)
-        rvec: (3,1) Rodrigues rotation vector marker→camera
-    """
-    # unpack
     marker_pos, marker_rot = marker_pos_rot
 
     # 1) build GLOBAL→MARKER pose
@@ -735,11 +676,11 @@ def inverse_calculate_camera_position2(camera_position, camera_rotation, marker_
     t_CG = np.asarray(camera_position).reshape(3,1)
 
     # ---- invert the forward transform ----
-    # rotation: R_marker→camera = (R_camera→global)^T * (R_marker→global)
+    # rotation: R_marker→camera = (R_marker→global)^T * (R_camera→global)
     R_MC = R_MG.T @ R_CG
     rvec, _ = cv2.Rodrigues(R_MC)
 
-    # translation: t_marker→camera = R_CG^T * (t_MG - t_CG)
+    # translation: t_marker→camera = (R_marker→global)^T * (T_camera→global - T_marker→global)
     tvec = R_MG.T @ (t_CG - t_MG)
 
     return tvec, rvec
@@ -756,7 +697,7 @@ def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
     aligns with camera_dir_known.
     """
     # Get rvec and tvec from the camera position and rotation
-    tvec, rvec = inverse_calculate_camera_position2(camera_position, camera_rotation, marker_pos_rot)
+    tvec, rvec = inverse_calculate_camera_position(camera_position, camera_rotation, marker_pos_rot)
     
     #camera_position_2, camera_rotation_2 = calculate_camera_position(tvec, rvec, marker_pos_rot)
     #print(f"diff: {np.linalg.norm(camera_position - camera_position_2):.3f}m, {np.linalg.norm(camera_rotation - camera_rotation_2):.3f}°")

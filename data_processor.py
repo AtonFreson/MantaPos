@@ -959,11 +959,11 @@ if __name__ == "__main__":
 
     # Time correction variables
     marker_unit = 4 #0, 1, 2 or 3. Use 4 for the average of the others.
-    display_all = 0
+    display_all = 1
     rising_edge = 1
     offset_encoder = False
     replace_erronious_pos = True
-    time_correction = 638.00 # Time correction in ms for camera data
+    time_correction = 628.49 # Time correction in ms for camera data
     save_altered_data = False # Save altered data to file 
     auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
     camera_pos_offset_ref = 1.3895 # Expected camera y-position offset in meters, based on quad marker data
@@ -990,7 +990,6 @@ if __name__ == "__main__":
     squares_vertically = 3
     square_length = 0.500/squares_vertically # Real world length of each square in meters
     corner_offset = square_length*squares_vertically/2
-    marker_numbers = [18, 22, 26, 30] # Marker numbers to use in the quad ChArUco boards, number then 3 next
 
     quad_order = [3, 0, 1, 2]
     quad_marker_pos = [
@@ -1286,6 +1285,7 @@ if __name__ == "__main__":
     #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
     if display_all:
         processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], fields=['position'])
+        processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], fields=['rotation'])
     #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
     #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
     
@@ -1298,7 +1298,6 @@ if __name__ == "__main__":
     processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
                         ref_timestamps = ref_timestamps, ref_data = -1*np.array(ref_data), 
                         all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)
-    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], fields=['rotation'])
     
     # Run matplotlib event loop to keep the plots open
     plt.show(block=True)
