@@ -732,7 +732,7 @@ def alter_to_correct_pose(camera_position, camera_rotation, marker_pos_rot,
 
     # 5) Return the best camera orientation, and the probabilities
     if total1 < total2:
-        return calculate_camera_position(tvec2, rvec2, marker_pos_rot), [total1, total2], True
+        return calculate_camera_position(tvec2, rvec2, marker_pos_rot), [total1, total2], True, tvec, rvec, tvec2, rvec2
     return (None, None), [total1, total2], False
 
 
@@ -946,8 +946,7 @@ def alter_to_correct_pose2(camera_position_global_input, camera_rotation_global_
         print(f"  Final Output camera_rot_global_deg: {np.array(final_camera_rot_global_deg).round(4)}")
         print(f"  Was Flipped: {was_flipped_flag}")
 
-    return (final_camera_pos_global, final_camera_rot_global_deg), [score_orig, score_alt], was_flipped_flag
-
+    return (final_camera_pos_global, final_camera_rot_global_deg), [score_orig, score_alt], was_flipped_flag, tvec_m_in_c_orig, rvec_m_in_c_orig, tvec_m_in_c_alt, rvec_m_in_c_alt
 
 
 

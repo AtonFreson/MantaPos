@@ -1085,11 +1085,16 @@ while True:
                 marker_order = [h,g,f,d] # NOT ALL CORRECT
                 corrected_pose = False
                 if replace_erronious_pos:
-                    (camera_pos, camera_rot), error_scores, corrected_pose = manta.alter_to_correct_pose(
+                    (camera_pos, camera_rot), error_scores, corrected_pose, tvec, rvec, tvec2, rvec2 = manta.alter_to_correct_pose2(
                         data['camera_pos_'+str(marker_idx)]['position'],
                         data['camera_pos_'+str(marker_idx)]['rotation'],
                         [quad_marker_pos[marker_order[marker_idx]], quad_marker_rot[1]]
                     )
+
+                    data['camera_pos_'+str(marker_idx)]['tvec'] = tvec
+                    data['camera_pos_'+str(marker_idx)]['rvec'] = rvec
+                    data['camera_pos_'+str(marker_idx)]['tvec2'] = tvec2
+                    data['camera_pos_'+str(marker_idx)]['rvec2'] = rvec2
 
                     if corrected_pose:
                         # Shift rotational calculation error
@@ -1269,22 +1274,22 @@ while True:
         #print(f"Altered data saved to {altered_filepath}")
 
     rots = []
-    marker_unit = 2
+    marker_unit = 0
     for data in processor.data:
         if data['mpu_unit'] == 4:
             if 'camera_pos_'+str(marker_unit) not in data:
                 continue
-            rots.append(data['camera_pos_'+str(marker_unit)]['rotation'])
+            rots.append(data['camera_pos_'+str(marker_unit)]['rvec2'])
             #print(data['camera_pos_'+str(marker_unit)]['rotation'])
 
     std = np.std(np.array(rots), axis=0)
     print("")
     print(p,s,t, " ", h,g,f,d)
-    print(std)
-    if std[0] < 8 or std[1] < 7:
+    print(std.flatten())
+    if std[0] < 0.2 and std[1] < 0.2:
         exit(1)
     
-    h,g,f,d = iter_function_no_itertools(h,g,f,d)
+    #h,g,f,d = iter_function_no_itertools(h,g,f,d)
     if h == 0 and g == 1 and f == 2 and d == 3:
         t += 90
         if t == 360:
