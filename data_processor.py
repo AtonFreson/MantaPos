@@ -959,7 +959,7 @@ if __name__ == "__main__":
 
     # Time correction variables
     marker_unit = 4 #0, 1, 2 or 3. Use 4 for the average of the others.
-    display_all = 0
+    display_all = 1
     rising_edge = 1
     offset_encoder = False
     replace_erronious_pos = True
@@ -998,7 +998,7 @@ if __name__ == "__main__":
         [QUAD_MARKER_POS[quad_order[2]][0] - corner_offset, QUAD_MARKER_POS[quad_order[2]][1] - corner_offset, MARKERS_Z_LEVEL],
         [QUAD_MARKER_POS[quad_order[3]][0] + corner_offset, QUAD_MARKER_POS[quad_order[3]][1] - corner_offset, MARKERS_Z_LEVEL]
     ]
-    quad_marker_rot = [[0,0,180], [0,0,180], [0,0,0], [0,0,180]]
+    quad_marker_rot = [[0,0,180], [0,0,180], [0,0,180], [0,0,180]]
     # 2: 0 0 0, 0 0 180, 0 180 0
     modified_camera_data = []
     # Modify data that is erronious
@@ -1015,15 +1015,16 @@ if __name__ == "__main__":
                 marker_order = [[0,2], [1,2], [2,2], [3,2]] # LIKELY NOT ALL CORRECT
                 corrected_pose = False
                 if replace_erronious_pos:
-                    '''(camera_pos, camera_rot), error_scores, corrected_pose, tvec, rvec, tvec2, rvec2 = manta.alter_to_correct_pose2(
+                    (camera_pos, camera_rot), error_scores, corrected_pose = manta.alter_to_correct_pose(
                         data['camera_pos_'+str(marker_idx)]['position'],
                         data['camera_pos_'+str(marker_idx)]['rotation'],
                         [quad_marker_pos[marker_order[marker_idx][0]], quad_marker_rot[marker_order[marker_idx][1]]]
-                    )'''
-                    rots = [[0,0,0], [0,0,180], [0,180,0]]
+                    )
+
+                    '''rots = [[0,0,0], [0,0,180], [0,180,0]]
                     rvec2s = []
                     for rots_vals in range(len(rots)):
-                        (camera_pos, camera_rot), error_scores, corrected_pose, tvec, rvec, tvec2, rvec2 = manta.alter_to_correct_pose2(
+                        (camera_pos, camera_rot), error_scores, corrected_pose, tvec2, rvec2 = manta.alter_to_correct_pose2(
                             data['camera_pos_'+str(marker_idx)]['position'],
                             data['camera_pos_'+str(marker_idx)]['rotation'],
                             [quad_marker_pos[marker_order[marker_idx][0]], rots[rots_vals]]
@@ -1032,8 +1033,10 @@ if __name__ == "__main__":
                     
                     # construct rvec2 with x from 0, y from 1 and z from 2
                     rvec2 = np.array([rvec2s[0][0], rvec2s[1][1], rvec2s[2][2]])
-
-
+                    
+                    camera_pos, camera_rot = manta.calculate_camera_position2(
+                        tvec2, rvec2, [quad_marker_pos[marker_order[marker_idx][0]], quad_marker_rot[marker_order[marker_idx][1]]]
+                    )
 
                     # Make rvec2 into degrees
                     rvec2 = np.rad2deg(rvec2)
@@ -1043,10 +1046,8 @@ if __name__ == "__main__":
                             elif rvec2[i] < -90:
                                 rvec2[i] += 180
                     
-                    data['camera_pos_'+str(marker_idx)]['tvec'] = tvec
-                    data['camera_pos_'+str(marker_idx)]['rvec'] = rvec
                     data['camera_pos_'+str(marker_idx)]['tvec2'] = tvec2
-                    data['camera_pos_'+str(marker_idx)]['rvec2'] = rvec2
+                    data['camera_pos_'+str(marker_idx)]['rvec2'] = rvec2'''
 
                     if corrected_pose:
                         # Shift rotational calculation error
@@ -1059,6 +1060,8 @@ if __name__ == "__main__":
                         data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
                         modified_camera_data[-1][2][marker_idx] = camera_pos.tolist()
                         modified_camera_data[-1][3][marker_idx] = camera_rot.tolist()
+                    else:
+                        print("Warning: did not correct pose for marker", marker_idx, "at timestamp", data['camera']['timestamp'])
                     
                     # Notify if the error values are too similar to each other
                     if abs(error_scores[0] - error_scores[1]) < 0.1:
@@ -1190,12 +1193,12 @@ if __name__ == "__main__":
         y_fit[best_offset] = np.max(std_vals[:, 1])
 
         # Improve the best offset by doing detailed search around the best offset
-        detailed_range = np.arange(std_vals[best_offset-10][0], std_vals[best_offset+10][0], 0.01)
+        detailed_range = np.arange(std_vals[max(best_offset-10,0)][0], std_vals[max(best_offset+10,20)][0], 0.01)
         best_offset_improved = detailed_range[np.argmin(y_curve(detailed_range))]
 
         idx = 0
         for data in processor.data:
-            if data['mpu_unit'] == 5:
+            if data['mpu_unit'] == 6:
                 if 'auto-diff_vs_offset' not in data:
                     continue
                 data['auto-diff_vs_offset']['std'] = [data['auto-diff_vs_offset']['std'], y_fit[idx]]
@@ -1324,12 +1327,11 @@ if __name__ == "__main__":
 
     if display_all:
         processor.visualize(mpu_units=[6], sensor_types=['auto-diff_vs_offset'], fields=['std'])
-        processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera'], 
-                            fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
-    '''processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
+        processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera', 'pressure'], 
+                            fields=['position', '-distance', 'time_offset', 'enc-cam_diff', 'depth0', 'depth1'])
+    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
                         ref_timestamps = ref_timestamps, ref_data = -1*np.array(ref_data), 
-                        all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)'''
-    #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rvec', 'tvec'])
-    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rvec2', 'tvec2'])
+                        all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)
+    
     # Run matplotlib event loop to keep the plots open
     plt.show(block=True)
