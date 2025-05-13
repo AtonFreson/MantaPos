@@ -954,7 +954,8 @@ if __name__ == "__main__":
     filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
     filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
 
-    filenames.extend(["ChArUco Quad 7m run1"])
+    filenames.extend(["ChArUco Quad 7-4.5m"])
+    #filenames.extend(["ChArUco Quad 7m run1"])
     #filenames.extend(["altered/ChArUco Quad 7m run1"])
 
     # Time correction variables
@@ -1301,6 +1302,15 @@ if __name__ == "__main__":
         altered_file.close()
         print(f"Altered data saved to {altered_filepath}")
 
+    # Compare pressure depths to z-axis encoder values
+    encoder_entries = [d for d in processor.data if d.get('mpu_unit') == 1] # Get encoder entries from MPU unit 1
+    for data in processor.data:
+        if data['mpu_unit'] == 0:
+            # Find the closest encoder entry to the pressure timestamp
+            closest = min(encoder_entries, key=lambda x: abs(x['encoder']['timestamp'] - data['pressure']['timestamp']))
+            # Store the difference between pressure depths and encoder distance
+            data['pressure']['depth0_diff'] = data['pressure']['depth0'] - closest['encoder']['distance']
+            data['pressure']['depth1_diff'] = data['pressure']['depth1'] - closest['encoder']['distance']
 
     extracted = processor.extract_all_data()
 
@@ -1328,7 +1338,8 @@ if __name__ == "__main__":
     if display_all:
         processor.visualize(mpu_units=[6], sensor_types=['auto-diff_vs_offset'], fields=['std'])
         processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera', 'pressure'], 
-                            fields=['position', '-distance', 'time_offset', 'enc-cam_diff', 'depth0', 'depth1'])
+                            fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
+        processor.visualize(mpu_units=[0], sensor_types=['pressure'], fields=['depth0_diff', 'depth1_diff', 'depth0', 'depth1'])
     processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
                         ref_timestamps = ref_timestamps, ref_data = -1*np.array(ref_data), 
                         all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)
