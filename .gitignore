@@ -3,3 +3,4 @@ pressure-test/pressure_logs/pressure_graphs.xlsx
 snapshots/
 markers/
 roi.png
+__pycache__/
