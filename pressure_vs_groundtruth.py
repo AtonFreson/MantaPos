@@ -164,6 +164,8 @@ def process_recording(file_path: Path) -> Dict[str, Tuple[int, Optional[float], 
             result[f"ch{ch}"] = (len(arr), mean(arr), stdev(arr))
     # Attach mean ground-truth depth for plotting
     result["mean_gt_depth"] = (len(gt_depths), (mean(gt_depths) if gt_depths else None), None)
+    # Attach per-sample arrays for detailed plotting
+    result["samples"] = {"gt": gt_depths, "diff0": diffs[0], "diff1": diffs[1]}
     return result
 
 
@@ -192,6 +194,14 @@ def main():
         'ArUco': {'x': [], 'y': [], 'yerr': []},
         'ChArUco': {'x': [], 'y': [], 'yerr': []},
     }
+    # Collect per-sample data for requested plots
+    target_labels = {
+        #'aruco quad 4.5-2m': 'ArUco Quad 4.5-2m',
+        #'aruco single 2-4.5m': 'ArUco Single 2-4.5m',
+        'aruco quad 7m run2': 'ArUco Quad 7m Run2',
+        'aruco quad 2m run2': 'ArUco Quad 2m Run2',
+    }
+    sample_plots: Dict[str, Dict[str, List[float]]] = {}
     last_name_c0 = None
     for fp in files:
         stats = process_recording(fp)
@@ -224,6 +234,16 @@ def main():
                     plot_data[label]['y'].append(float(mean_val))
                     plot_data[label]['yerr'].append(float(std_val) if isinstance(std_val, (int, float)) else 0.0)
 
+        # Capture per-sample data for specific recordings
+        lowname = fp.name.lower()
+        for key, pretty in target_labels.items():
+            if key in lowname:
+                samples = stats.get('samples') or {}
+                gt = samples.get('gt') or []
+                d0 = samples.get('diff0') or []
+                d1 = samples.get('diff1') or []
+                sample_plots[pretty] = {'gt': list(gt), 'diff0': list(d0), 'diff1': list(d1)}
+
     # Plot and save
     if plt is None:
         print("matplotlib not available; skipping plot generation.")
@@ -243,8 +263,31 @@ def main():
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
-    plt.show(block=True)
+    # Don't show yet; more figures follow
 
+
+    # Additional plots per user request: per-sample diff vs reference position for two specific recordings
+    for pretty_name, data in sample_plots.items():
+        gt = data.get('gt') or []
+        d0 = data.get('diff0') or []
+        d1 = data.get('diff1') or []
+        if not gt or (not d0 and not d1):
+            continue
+        fig_i, ax_i = plt.subplots(figsize=(8, 5))
+        if d0:
+            ax_i.plot(gt, d0, '.', label='ch0', alpha=0.7, color='#2ca02c')
+        if d1:
+            ax_i.plot(gt, d1, '.', label='ch1', alpha=0.7, color='#d62728')
+        ax_i.axhline(0.0, color='gray', linewidth=1, linestyle='--', alpha=0.7)
+        ax_i.set_xlabel('Reference position (m)')
+        ax_i.set_ylabel('Pressure - reference (m)')
+        ax_i.set_title(f'{pretty_name}: diff vs reference position')
+        ax_i.grid(True, alpha=0.3)
+        ax_i.legend()
+        fig_i.tight_layout()
+
+    # Render all figures
+    plt.show(block=True)
 
 if __name__ == '__main__':
     main()
