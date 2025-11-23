@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from statistics import mean, stdev
 from typing import Dict, List, Optional, Tuple
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 # Use the reference implementation from mantaPosLib
 from mantaPosLib import global_reference_pos
 from typing import Any
@@ -49,9 +49,8 @@ def process_recording(file_path: Path) -> Dict[str, Tuple[int, Optional[float], 
     enc_ts: Dict[int, List[float]] = {0: [], 1: [], 2: []}
     enc_val: Dict[int, List[float]] = {0: [], 1: [], 2: []}
     pressure_samples: List[Dict[str, float]] = []  # {t, d0, d1}
-    offsets_timeline: List[Tuple[float, Optional[float], Optional[float]]] = []  # (t, off0, off1)
-    last_off0: Optional[float] = None
-    last_off1: Optional[float] = None
+    offset_ts: Dict[int, List[float]] = {0: [], 1: []}
+    offset_val: Dict[int, List[float]] = {0: [], 1: []}
 
     # First pass: collect timelines
     try:
@@ -89,15 +88,17 @@ def process_recording(file_path: Path) -> Dict[str, Tuple[int, Optional[float], 
                     if tpr is not None and d0 is not None and d1 is not None:
                         pressure_samples.append({'t': float(tpr), 'd0': d0, 'd1': d1})
 
-                # Offsets may arrive on separate MPU unit entries; record timeline when present
-                if isinstance(pr, dict) and ('depth_offset0' in pr or 'depth_offset1' in pr):
+                # Offsets are emitted from MPU 3 pressure packets; capture per-channel timelines
+                if isinstance(pr, dict):
                     toff = pr.get('timestamp')
                     if toff is not None:
-                        if 'depth_offset0' in pr:
-                            last_off0 = _maybe_float(pr.get('depth_offset0')) or last_off0
-                        if 'depth_offset1' in pr:
-                            last_off1 = _maybe_float(pr.get('depth_offset1')) or last_off1
-                        offsets_timeline.append((float(toff), last_off0, last_off1))
+                        t_off = float(toff)
+                        for ch in (0, 1):
+                            key = f'depth_offset{ch}'
+                            val = _maybe_float(pr.get(key))
+                            if val is not None:
+                                offset_ts[ch].append(t_off)
+                                offset_val[ch].append(val)
     except FileNotFoundError:
         return {"ch0": (0, None, None), "ch1": (0, None, None)}
 
@@ -109,18 +110,28 @@ def process_recording(file_path: Path) -> Dict[str, Tuple[int, Optional[float], 
             enc_ts[m] = [p[0] for p in pairs]
             enc_val[m] = [p[1] for p in pairs]
     pressure_samples.sort(key=lambda s: s['t'])
-    offsets_timeline.sort(key=lambda o: o[0])
+    for ch in (0, 1):
+        if offset_ts[ch] and offset_ts[ch] != sorted(offset_ts[ch]):
+            pairs = sorted(zip(offset_ts[ch], offset_val[ch]), key=lambda p: p[0])
+            offset_ts[ch] = [p[0] for p in pairs]
+            offset_val[ch] = [p[1] for p in pairs]
 
     # Helper to get last offsets at time t
+    def _offset_at_channel(t: float, ch: int) -> Optional[float]:
+        ts = offset_ts[ch]
+        vs = offset_val[ch]
+        if not ts:
+            return None
+        if len(ts) == 1:
+            return vs[0] if t >= ts[0] else None
+        if t < ts[0]:
+            return None
+        if t >= ts[-1]:
+            return vs[-1]
+        return _interp_at(t, ts, vs)
+
     def offsets_at(t: float) -> Tuple[Optional[float], Optional[float]]:
-        if not offsets_timeline:
-            return (None, None)
-        # advance via bisect
-        ts = [x[0] for x in offsets_timeline]
-        i = bisect_left(ts, t)
-        if i == 0:
-            return (offsets_timeline[0][1], offsets_timeline[0][2])
-        return (offsets_timeline[i-1][1], offsets_timeline[i-1][2])
+        return (_offset_at_channel(t, 0), _offset_at_channel(t, 1))
 
     # Second pass: evaluate differences at each pressure sample time
     diffs: Dict[int, List[float]] = {0: [], 1: []}
@@ -181,7 +192,7 @@ def main():
     ignore_substrings = [
         'data_handling_test',
         'depth 1 2 calib',
-        'depth 3 4 calib'
+        'depth 3 4 calib',
     ]
     files = [p for p in files if not any(sub.lower() in p.name.lower() for sub in ignore_substrings)]
     if not files:
@@ -194,13 +205,29 @@ def main():
         'ArUco': {'x': [], 'y': [], 'yerr': []},
         'ChArUco': {'x': [], 'y': [], 'yerr': []},
     }
+
     # Collect per-sample data for requested plots
-    target_labels = {
-        #'aruco quad 4.5-2m': 'ArUco Quad 4.5-2m',
-        #'aruco single 2-4.5m': 'ArUco Single 2-4.5m',
-        'aruco quad 7m run2': 'ArUco Quad 7m Run2',
-        'aruco quad 2m run2': 'ArUco Quad 2m Run2',
-    }
+    single_target_labels = [
+        'ArUco Quad 4.5-2m',
+        'ArUco Single 2-4.5m',
+        #'ArUco Single 2m Run2',
+        #'ArUco Quad 2m Run2',
+        #'ChArUco Single 2m Run2',
+        #'ChArUco Quad 2m Run2',
+    ]
+
+    # Skip these from combined graph
+    combined_graph_skip_labels = [
+        'ChArUco Quad 7-4.5m',
+        'ChArUco Quad 3.8-4.5m',
+        'ChArUco Single 4.5-2m',
+        'ChArUco Single 4.5-7m',
+        'Aruco Quad 4.5-7m',
+        'Aruco Quad 4.5-2m',
+        'Aruco Single 2-4.5m',
+        'Aruco Single 7-4.5m'
+    ]
+
     sample_plots: Dict[str, Dict[str, List[float]]] = {}
     last_name_c0 = None
     for fp in files:
@@ -210,7 +237,7 @@ def main():
         n_gt, mean_gt_depth, _ = stats.get('mean_gt_depth', (0, None, None))
         def fmt(v: Optional[float]) -> str:
             return f"{v:.6f}" if isinstance(v, (int, float)) else ""
-        # Set a fixed total width for fp.name and c0 combined (e.g., 38 chars)
+        
         name_c0 = f"{fp.name}   @ {c0}:"
         if last_name_c0 and name_c0[0] != last_name_c0[0]:
             print()
@@ -226,7 +253,12 @@ def main():
 
         # Prepare plotting points (in meters) if we have a mean ground-truth depth
         label = 'ChArUco' if 'charuco' in fp.name.lower() else ('ArUco' if 'aruco' in fp.name.lower() else None)
-        if label and isinstance(mean_gt_depth, (int, float)) and mean_gt_depth is not None:
+        if (
+            label
+            and isinstance(mean_gt_depth, (int, float))
+            and mean_gt_depth is not None
+            and not any(skip.lower() in fp.name.lower() for skip in combined_graph_skip_labels)
+        ):
             # Add both channels as separate points if they have stats
             for mean_val, std_val, count_val in ((m0, s0, c0), (m1, s1, c1)):
                 if count_val and count_val > 0 and isinstance(mean_val, (int, float)):
@@ -236,13 +268,18 @@ def main():
 
         # Capture per-sample data for specific recordings
         lowname = fp.name.lower()
-        for key, pretty in target_labels.items():
+        for pretty_key in single_target_labels:
+            key = pretty_key.lower()
+            key_is_charuco = 'charuco' in key
+            file_is_charuco = 'charuco' in lowname
+            if key_is_charuco != file_is_charuco:
+                continue
             if key in lowname:
                 samples = stats.get('samples') or {}
                 gt = samples.get('gt') or []
                 d0 = samples.get('diff0') or []
                 d1 = samples.get('diff1') or []
-                sample_plots[pretty] = {'gt': list(gt), 'diff0': list(d0), 'diff1': list(d1)}
+                sample_plots[pretty_key] = {'gt': list(gt), 'diff0': list(d0), 'diff1': list(d1)}
 
     # Plot and save
     if plt is None:
