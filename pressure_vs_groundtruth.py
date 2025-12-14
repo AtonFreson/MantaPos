@@ -218,20 +218,41 @@ def main():
 
     # Skip these from combined graph
     combined_graph_skip_labels = [
-        'ChArUco Quad 7-4.5m',
-        'ChArUco Quad 3.8-4.5m',
-        'ChArUco Single 4.5-2m',
-        'ChArUco Single 4.5-7m',
-        'Aruco Quad 4.5-7m',
-        'Aruco Quad 4.5-2m',
-        'Aruco Single 2-4.5m',
-        'Aruco Single 7-4.5m'
+        #'ChArUco Quad 7-4.5m',
+        #'ChArUco Quad 3.8-4.5m',
+        #'ChArUco Single 4.5-2m',
+        #'ChArUco Single 4.5-7m',
+        #'Aruco Quad 4.5-7m',
+        #'Aruco Quad 4.5-2m',
+        #'Aruco Single 2-4.5m',
+        #'Aruco Single 7-4.5m'
     ]
+
+    # Ignore files ending in 'm.json', for correct channel stats
+    #files = [p for p in files if not p.name.lower().endswith('m.json')]
 
     sample_plots: Dict[str, Dict[str, List[float]]] = {}
     last_name_c0 = None
+    
+    aruco_diffs_ch0: List[float] = []
+    aruco_diffs_ch1: List[float] = []
+    charuco_diffs_ch0: List[float] = []
+    charuco_diffs_ch1: List[float] = []
+
     for fp in files:
         stats = process_recording(fp)
+        samples = stats.get('samples') or {}
+        
+        d0 = samples.get('diff0') or []
+        d1 = samples.get('diff1') or []
+        
+        if 'charuco' in fp.name.lower() and '2m' in fp.name.lower():
+            charuco_diffs_ch0.extend(d0)
+            charuco_diffs_ch1.extend(d1)
+        elif '2m' in fp.name.lower():
+            aruco_diffs_ch0.extend(d0)
+            aruco_diffs_ch1.extend(d1)
+
         c0, m0, s0 = stats['ch0']
         c1, m1, s1 = stats['ch1']
         n_gt, mean_gt_depth, _ = stats.get('mean_gt_depth', (0, None, None))
@@ -280,6 +301,28 @@ def main():
                 d0 = samples.get('diff0') or []
                 d1 = samples.get('diff1') or []
                 sample_plots[pretty_key] = {'gt': list(gt), 'diff0': list(d0), 'diff1': list(d1)}
+
+    print("-" * 80)
+    # ArUco stats
+    if aruco_diffs_ch0:
+        m = mean(aruco_diffs_ch0)
+        s = stdev(aruco_diffs_ch0)
+        print(f"ArUco ch0:   count={len(aruco_diffs_ch0)}, mean={m*100:.6f}, std={s*100:.6f}")
+    if aruco_diffs_ch1:
+        m = mean(aruco_diffs_ch1)
+        s = stdev(aruco_diffs_ch1)
+        print(f"ArUco ch1:   count={len(aruco_diffs_ch1)}, mean={m*100:.6f}, std={s*100:.6f}")
+
+    # ChArUco stats
+    if charuco_diffs_ch0:
+        m = mean(charuco_diffs_ch0)
+        s = stdev(charuco_diffs_ch0)
+        print(f"ChArUco ch0: count={len(charuco_diffs_ch0)}, mean={m*100:.6f}, std={s*100:.6f}")
+    if charuco_diffs_ch1:
+        m = mean(charuco_diffs_ch1)
+        s = stdev(charuco_diffs_ch1)
+        print(f"ChArUco ch1: count={len(charuco_diffs_ch1)}, mean={m*100:.6f}, std={s*100:.6f}")
+    print("-" * 80)
 
     # Plot and save
     if plt is None:
