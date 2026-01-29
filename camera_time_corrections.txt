@@ -1,9 +1,63 @@
-"ChArUco Quad 2m run1" 525.38
-"ChArUco Quad 2m run2" 604.33
-"ChArUco Quad 2m run3" 619.26
-"ChArUco Quad 4.5m run1" 646.86
-"ChArUco Quad 4.5m run2" 612.32
-"ChArUco Quad 4.5m run3" 664.82
-"ChArUco Quad 7m run1" 628.49
-"ChArUco Quad 7m run2" 
-"ChArUco Quad 7m run3" 
+### ArUco Quad ###
+"ArUco Quad 2m run1" 155
+"ArUco Quad 2m run2" 142
+"ArUco Quad 2m run3" 161
+
+"ArUco Quad 4.5m run1" -3178
+"ArUco Quad 4.5m run2" -3194
+"ArUco Quad 4.5m run3" -3187
+
+"ArUco Quad 7m run1" -3181
+"ArUco Quad 7m run2" -3187
+"ArUco Quad 7m run3" -3186
+
+"ArUco Quad 4.5-2m" -3172
+"ArUco Quad 4.5-7m" -3197
+
+### ArUco Single ###
+"ArUco Single 2m run1" 141
+"ArUco Single 2m run2" 136
+"ArUco Single 2m run3" 140
+
+"ArUco Single 4.5m run1" -3188
+"ArUco Single 4.5m run2" -3194
+"ArUco Single 4.5m run3" -3184
+
+"ArUco Single 7m run1" -3175
+"ArUco Single 7m run2" -3174
+"ArUco Single 7m run3" -3190
+
+"ArUco Single 2-4.5m" -3196
+"ArUco Single 7-4.5m" -3197
+
+### ChArUco Quad ###
+"ChArUco Quad 2m run1" 567
+"ChArUco Quad 2m run2" 575
+"ChArUco Quad 2m run3" 582
+
+"ChArUco Quad 4.5m run1" 561
+"ChArUco Quad 4.5m run2" 602
+"ChArUco Quad 4.5m run3" 585
+
+"ChArUco Quad 7m run1" 628
+"ChArUco Quad 7m run2" 628
+"ChArUco Quad 7m run3" 642
+
+"ChArUco Quad 3.8-4.5m" 579
+"ChArUco Quad 7-4.5m" 671
+
+### ChArUco Single ###
+"ChArUco Single 2m run1" 543
+"ChArUco Single 2m run2" 519
+"ChArUco Single 2m run3" 546
+
+"ChArUco Single 4.5m run1" 574
+"ChArUco Single 4.5m run2" 612
+"ChArUco Single 4.5m run3" 598
+
+"ChArUco Single 7m run1" 613
+"ChArUco Single 7m run2" 615
+"ChArUco Single 7m run3" 652
+
+"ChArUco Single 4.5-2m" 693
+"ChArUco Single 4.5-7m" 600

@@ -929,7 +929,532 @@ class DataProcessor:
             plt.show(block=False)
 
 # --- Example Usage ---
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+class Config:
+    """Configuration for data processing."""
+    # Marker configuration
+    MARKERS_Z_LEVEL = -0.3 + 0.1124
+    QUAD_MARKER_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
+    SQUARES_VERTICALLY = 3
+    SQUARE_LENGTH = 0.500 / SQUARES_VERTICALLY
+    CORNER_OFFSET = SQUARE_LENGTH * SQUARES_VERTICALLY / 2
+    QUAD_ORDER = [3, 0, 1, 2]
+    MARKER_ORDER = [[0, 2], [1, 2], [2, 2], [3, 2]]
+    
+    # Processing settings
+    marker_unit = 4  # 0-3 for individual markers, 4 for average
+    display_all = True
+    rising_edge = 1
+    offset_encoder = False
+    replace_erronious_pos = False
+    #time_correction = 628.49  # Time correction in ms for camera data, good for ChArUco
+    time_correction = None  # Set to None for auto-correction, or specify manual value in ms
+    save_altered_data = False
+    auto_correction_range = [-2000, 4000] # Good for ChArUco
+    #auto_correction_range = [-6000, 0] # Good for ArUco
+    #auto_correction_range = [-3000, 3000] # Good for ArUco 2m
+    camera_pos_offset_ref = 1.3895  # Expected camera y-position offset
+
+
+def get_marker_config() -> tuple[list, list]:
+    """
+    Get quad marker positions and rotations.
+    
+    Returns:
+        Tuple of (quad_marker_pos, quad_marker_rot)
+    """
+    cfg = Config
+    quad_marker_pos = [
+        [cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[0]][0] + cfg.CORNER_OFFSET, 
+         cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[0]][1] - cfg.CORNER_OFFSET, cfg.MARKERS_Z_LEVEL],
+        [cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[1]][0] + cfg.CORNER_OFFSET, 
+         cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[1]][1] + cfg.CORNER_OFFSET, cfg.MARKERS_Z_LEVEL],
+        [cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[2]][0] - cfg.CORNER_OFFSET, 
+         cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[2]][1] - cfg.CORNER_OFFSET, cfg.MARKERS_Z_LEVEL],
+        [cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[3]][0] + cfg.CORNER_OFFSET, 
+         cfg.QUAD_MARKER_POS[cfg.QUAD_ORDER[3]][1] - cfg.CORNER_OFFSET, cfg.MARKERS_Z_LEVEL]
+    ]
+    quad_marker_rot = [[0, 0, 180], [0, 0, 180], [0, 0, 180], [0, 0, 180]]
+    return quad_marker_pos, quad_marker_rot
+
+
+def apply_pose_corrections(processor: DataProcessor, quad_marker_pos: list, quad_marker_rot: list,
+                           time_correction: float) -> list:
+    """
+    Apply pose corrections to fix solvePnP planar marker ambiguity.
+    
+    Also creates camera_pos_4 as average of all corrected markers.
+    
+    Args:
+        processor: DataProcessor with loaded data
+        quad_marker_pos: Marker world positions
+        quad_marker_rot: Marker rotations
+        time_correction: Time offset to apply
+        
+    Returns:
+        List of modified camera data for saving
+    """
+    marker_order = Config.MARKER_ORDER
+    modified_camera_data = []
+    
+    # Handle None time_correction (will be updated later with auto value)
+    tc = time_correction if time_correction is not None else 0
+    
+    for data in processor.data:
+        if data['mpu_unit'] != 4:
+            continue
+            
+        average_pos = []
+        average_rot = []
+        modified_camera_data.append([
+            data['recv_time'], 
+            int(data['camera']['timestamp'] + round(tc)),
+            [None, None, None, None], 
+            [None, None, None, None]
+        ])
+        
+        for marker_idx in range(4):
+            key = f'camera_pos_{marker_idx}'
+            if key not in data:
+                continue
+            
+            if Config.replace_erronious_pos:
+                (camera_pos, camera_rot), error_scores, corrected_pose = manta.alter_to_correct_pose(
+                    data[key]['position'],
+                    data[key]['rotation'],
+                    [quad_marker_pos[marker_order[marker_idx][0]], 
+                     quad_marker_rot[marker_order[marker_idx][1]]]
+                )
+                
+                if corrected_pose:
+                    # Apply rotation wraparound fix
+                    for i in range(3):
+                        if camera_rot[i] > 90:
+                            camera_rot[i] -= 180
+                        elif camera_rot[i] < -90:
+                            camera_rot[i] += 180
+                    data[key]['position'] = camera_pos
+                    data[key]['rotation'] = camera_rot
+                    modified_camera_data[-1][2][marker_idx] = camera_pos.tolist()
+                    modified_camera_data[-1][3][marker_idx] = camera_rot.tolist()
+                else:
+                    print(f"Warning: did not correct pose for marker {marker_idx} at timestamp {data['camera']['timestamp']}")
+                
+                if abs(error_scores[0] - error_scores[1]) < 0.1:
+                    print(f"Warning: Error values for marker {marker_idx} at timestamp {data['camera']['timestamp']} are too similar: {error_scores[0]} and {error_scores[1]}")
+            
+            average_pos.append(data[key]['position'])
+            average_rot.append(data[key]['rotation'])
+        
+        # Create camera_pos_4 as average
+        if len(average_pos) > 0:
+            average_pos = np.mean(np.stack(average_pos, axis=0), axis=0)
+            average_rot = np.mean(np.stack(average_rot, axis=0), axis=0)
+            data['camera_pos_4'] = {
+                'position': average_pos,
+                'rotation': average_rot
+            }
+    
+    return modified_camera_data
+
+
+def extract_camera_encoder_data(processor: DataProcessor, marker_unit: int) -> dict:
+    """
+    Extract camera and encoder data for offset calculations.
+    
+    Args:
+        processor: DataProcessor with loaded data
+        marker_unit: Which marker to use (0-3, or 4 for average)
+        
+    Returns:
+        Dictionary with camera_data, camera_timestamps, ref_data, ref_timestamps, etc.
+    """
+    camera_data = []
+    camera_data_ext = []
+    camera_timestamps = []
+    ref_data = []
+    ref_timestamps = []
+    initial_timestamp = None
+    
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            key = f'camera_pos_{marker_unit}'
+            if key not in data:
+                continue
+            if initial_timestamp is None:
+                initial_timestamp = data['camera']['timestamp']
+            
+            pos_y = data[key]['position'][1]
+            if data['camera']['timestamp'] - initial_timestamp < 1000:
+                camera_data.append(pos_y)
+            else:
+                camera_data_ext.append(pos_y)
+            camera_timestamps.append(data['camera']['timestamp'])
+            
+        if data['mpu_unit'] == 0:
+            if 'encoder' not in data:
+                continue
+            ref_data.append(data['encoder']['distance'])
+            ref_timestamps.append(data['encoder']['timestamp'])
+    
+    return {
+        'camera_data': np.array(camera_data) if camera_data else np.array([]),
+        'camera_data_ext': np.array(camera_data_ext),
+        'camera_timestamps': camera_timestamps,
+        'ref_data': ref_data,
+        'ref_timestamps': np.array(ref_timestamps),
+        'initial_timestamp': initial_timestamp,
+    }
+
+
+def calculate_position_offset(camera_data: np.ndarray, expected_offset: float) -> float:
+    """
+    Calculate camera y-position offset from first 1000ms of data.
+    
+    Args:
+        camera_data: Array of y-positions from first 1000ms
+        expected_offset: Expected offset value for validation
+        
+    Returns:
+        Position offset value
+    """
+    if len(camera_data) == 0:
+        return expected_offset
+    
+    camera_pos_offset = np.mean(camera_data)
+    print(f"\nCamera position offset: {camera_pos_offset:2.4f} +- {np.std(camera_data):.5f} (# vals: {len(camera_data)})")
+    
+    if abs(camera_pos_offset - expected_offset) > 0.1:
+        print(f"Warning: Camera position offset is significantly different from expected value ({expected_offset}m). Using the expected value instead.")
+        return expected_offset
+    
+    return camera_pos_offset
+
+
+def find_optimal_time_offset(camera_data: np.ndarray, camera_timestamps: list,
+                             ref_data: list, ref_timestamps: np.ndarray,
+                             search_range: list, current_time_correction: float) -> dict:
+    """
+    Find optimal time offset by minimizing position difference std.
+    
+    Uses 8th order polynomial fit and detailed search for precision.
+    
+    Args:
+        camera_data: All camera y-positions
+        camera_timestamps: Camera timestamps
+        ref_data: Encoder distances
+        ref_timestamps: Encoder timestamps
+        search_range: [min, max] search range in ms
+        current_time_correction: Current time correction value
+        
+    Returns:
+        Dictionary with best_offset, std_vals, y_curve, camera_timestamps_shifted, etc.
+    """
+    std_vals = []
+    camera_timestamps_shifted = [(camera_data).tolist(), []]
+    
+    # First pass: find the best offset
+    for i in range(search_range[0], search_range[1] + 10, 10):
+        pos_diff = []
+        for j in range(len(camera_data)):
+            closest_index = np.argmin(np.abs(camera_timestamps[j] - ref_timestamps + i))
+            closest_index = min(closest_index, len(ref_data) - 1)
+            
+            if abs(camera_timestamps[j] - ref_timestamps[closest_index] + i) > 500:
+                continue
+            pos_diff.append(-ref_data[closest_index] - camera_data[j])
+        
+        if len(pos_diff) > 10:
+            pos_diff = np.array(pos_diff)
+            pos_diff = pos_diff[np.abs(pos_diff - np.mean(pos_diff)) < 2 * np.std(pos_diff)]
+            std_vals.append([i, np.std(pos_diff), np.mean(pos_diff)])
+    
+    std_vals = np.array(std_vals)
+    
+    # Find minimum and apply polynomial smoothing
+    lowest_offset = np.argmin(std_vals[:, 1])
+    if lowest_offset < 100:
+        lowest_offset = 100
+    elif lowest_offset > len(std_vals) - 100:
+        lowest_offset = len(std_vals) - 100
+    
+    # 8th order polynomial fit
+    std_range = std_vals[lowest_offset - 100:lowest_offset + 100]
+    y_curve = np.poly1d(np.polyfit(std_range[:, 0], std_range[:, 1], 8))
+    y_fit = y_curve(std_vals[:, 0])
+    y_fit += 0.02 * (np.max(std_vals[:, 1]) - np.min(std_vals[:, 1]))
+    y_fit[:lowest_offset - 100] = np.max(std_vals[:, 1])
+    y_fit[lowest_offset + 100:] = np.max(std_vals[:, 1])
+    
+    best_offset_idx = np.argmin(y_fit)
+    y_fit[best_offset_idx] = np.max(std_vals[:, 1])
+    
+    # Detailed search around best offset
+    detailed_range = np.arange(
+        std_vals[max(best_offset_idx - 10, 0)][0],
+        std_vals[min(best_offset_idx + 10, len(std_vals) - 1)][0],
+        0.01
+    )
+    best_offset_improved = detailed_range[np.argmin(y_curve(detailed_range))]
+    
+    print(f"\nBest offset for camera data: {best_offset_improved:.2f} ms (closest: {std_vals[best_offset_idx][0]} & std: {std_vals[best_offset_idx][1]:.4f})")
+    
+    # Build shifted timestamps for visualization (use best offset if manual is None)
+    viz_time_correction = current_time_correction if current_time_correction is not None else best_offset_improved
+    for i in range(search_range[0], search_range[1] + 10, 10):
+        if i in range(int(viz_time_correction) // 10 * 10 - 400, 
+                     int(viz_time_correction) // 10 * 10 + 450, 50):
+            if i < int(viz_time_correction) - 15 or i > int(viz_time_correction) + 15:
+                camera_timestamps_shifted.append([ts + i for ts in camera_timestamps])
+    
+    return {
+        'best_offset': best_offset_improved,
+        'best_offset_idx': best_offset_idx,
+        'std_vals': std_vals,
+        'y_fit': y_fit,
+        'y_curve': y_curve,
+        'camera_timestamps_shifted': np.array(camera_timestamps_shifted, dtype=object),
+    }
+
+
+def apply_time_corrections(processor: DataProcessor, camera_data: np.ndarray,
+                           camera_timestamps: list, ref_data: list, ref_timestamps: np.ndarray,
+                           time_correction: float, camera_pos_offset: float,
+                           offset_result: dict, marker_unit: int) -> np.ndarray:
+    """
+    Apply time corrections and calculate position differences.
+    
+    Args:
+        processor: DataProcessor with loaded data
+        camera_data: All camera y-positions
+        camera_timestamps: Camera timestamps  
+        ref_data: Encoder distances
+        ref_timestamps: Encoder timestamps
+        time_correction: Time offset to apply
+        camera_pos_offset: Position offset
+        offset_result: Result from find_optimal_time_offset
+        marker_unit: Which marker to use
+        
+    Returns:
+        Array of position differences
+    """
+    # Calculate position differences
+    pos_difference = []
+    for i in range(len(camera_data)):
+        closest_index = np.argmin(np.abs(camera_timestamps[i] - ref_timestamps + time_correction))
+        closest_index = min(closest_index, len(ref_data) - 1)
+        if abs(camera_timestamps[i] - ref_timestamps[closest_index] + time_correction) > 500 and len(pos_difference):
+            pos_difference.append(pos_difference[-1])
+        else:
+            pos_difference.append(-ref_data[closest_index] - camera_data[i] + camera_pos_offset)
+    
+    pos_difference = np.array(pos_difference)
+    
+    # Add auto-diff entries to processor data
+    for i, (offset_val, std_val, mean_val) in enumerate(offset_result['std_vals']):
+        processor.data.append({
+            'mpu_unit': 6,
+            'auto-diff_vs_offset': {
+                'timestamp': offset_val,
+                'mean': mean_val,
+                'std': [std_val, offset_result['y_fit'][i]]
+            }
+        })
+    
+    # Apply corrections to camera entries
+    idx = 0
+    ref_pos_diff = 0
+    camera_timestamps_shifted = offset_result['camera_timestamps_shifted']
+    
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            key = f'camera_pos_{marker_unit}'
+            if key not in data:
+                continue
+            # Extract column idx from the shifted timestamps array
+            col_data = [row[idx] if idx < len(row) else None for row in camera_timestamps_shifted]
+            data[key]['timestamps_shifted'] = col_data
+            if idx >= len(pos_difference):
+                break
+            if np.abs(pos_difference[idx] - np.mean(pos_difference)) > 2 * np.std(pos_difference) and idx > 0:
+                data[key]['enc-cam_diff'] = ref_pos_diff
+            else:
+                data[key]['enc-cam_diff'] = pos_difference[idx]
+                ref_pos_diff = pos_difference[idx]
+            idx += 1
+    
+    return pos_difference
+
+
+def calculate_time_offsets_by_position(processor: DataProcessor, marker_unit: int,
+                                       camera_pos_offset: float, time_correction: float,
+                                       rising_edge: int, offset_encoder: bool):
+    """
+    Calculate time offset for each camera entry based on position matching.
+    
+    Args:
+        processor: DataProcessor with loaded data
+        marker_unit: Which marker to use
+        camera_pos_offset: Position offset
+        time_correction: Time correction
+        rising_edge: Direction flag
+        offset_encoder: Whether encoder is offset
+    """
+    for data in processor.data:
+        if data['mpu_unit'] != 4:
+            continue
+        
+        key = f'camera_pos_{marker_unit}'
+        if key not in data:
+            continue
+        
+        position_val = data[key]['position'][1] - camera_pos_offset
+        position_timestamp = data['camera']['timestamp'] + time_correction
+        
+        for data_ref in processor.data:
+            if data_ref['mpu_unit'] != 0:
+                continue
+            if data_ref['encoder']['timestamp'] < position_timestamp - 2000:
+                continue
+            
+            enc_dist = -data_ref['encoder']['distance']
+            condition = enc_dist > position_val if rising_edge else enc_dist < position_val
+            
+            if condition:
+                if abs(position_timestamp - data_ref['encoder']['timestamp']) > 1000:
+                    # Search for crossing point
+                    for data_ref_inner in processor.data:
+                        if data_ref_inner['mpu_unit'] != 0:
+                            continue
+                        if data_ref_inner['encoder']['timestamp'] < position_timestamp - 2000:
+                            continue
+                        enc_dist_inner = -data_ref_inner['encoder']['distance']
+                        inner_condition = enc_dist_inner < position_val if rising_edge else enc_dist_inner > position_val
+                        if inner_condition:
+                            data[key]['time_offset'] = min(max(-1000, position_timestamp - data_ref_inner['encoder']['timestamp']), 1000)
+                            break
+                        else:
+                            data[key]['time_offset'] = 0
+                else:
+                    data[key]['time_offset'] = position_timestamp - data_ref['encoder']['timestamp']
+                break
+            else:
+                data[key]['time_offset'] = 0
+        
+        if not offset_encoder:
+            data[key]['position'][1] = data[key]['position'][1] - camera_pos_offset
+
+
+def collect_all_camera_data(processor: DataProcessor, camera_pos_offset: float,
+                            time_correction: float) -> tuple[list, list]:
+    """
+    Collect all camera positions and corrected timestamps for visualization.
+    
+    Returns:
+        Tuple of (all_camera_data, all_camera_timestamps_corrected)
+    """
+    all_camera_data = [[], [], [], [], []]
+    all_camera_timestamps_corrected = [[], [], [], [], []]
+    
+    for data in processor.data:
+        if data['mpu_unit'] == 4:
+            for i in range(5):
+                key = f'camera_pos_{i}'
+                if key not in data:
+                    continue
+                offset = 0 if i == 4 else camera_pos_offset
+                all_camera_data[i].append(data[key]['position'][1] - offset)
+                all_camera_timestamps_corrected[i].append(data['camera']['timestamp'] + time_correction)
+    
+    return all_camera_data, all_camera_timestamps_corrected
+
+
+def compare_pressure_to_encoder(processor: DataProcessor):
+    """Compare pressure depths to z-axis encoder values."""
+    encoder_entries = [d for d in processor.data if d.get('mpu_unit') == 1]
+    
+    for data in processor.data:
+        if data['mpu_unit'] == 0:
+            closest = min(encoder_entries, key=lambda x: abs(x['encoder']['timestamp'] - data['pressure']['timestamp']))
+            data['pressure']['depth0_diff'] = data['pressure']['depth0'] - closest['encoder']['distance']
+            data['pressure']['depth1_diff'] = data['pressure']['depth1'] - closest['encoder']['distance']
+
+
+def save_altered_recording(filepath: str, modified_camera_data: list):
+    """
+    Save altered camera data to a new file.
+    
+    Args:
+        filepath: Original file path
+        modified_camera_data: List of modified camera entries
+    """
+    altered_filepath = filepath.split('/')[0] + '/altered/' + filepath.split('/')[1]
+    
+    with open(altered_filepath, 'w', encoding='utf-8') as altered_file:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                altered_file.write(line)
+                if '"mpu_unit": 4' in line:
+                    line_json = json.loads(line)
+                    line_json['mpu_unit'] = 5
+                    
+                    try:
+                        idx = next(i for i, row in enumerate(modified_camera_data) 
+                                  if row[0] == line_json['recv_time'])
+                    except StopIteration:
+                        print("Warning: No matching timestamp found for the camera data.")
+                        return
+                    
+                    line_json['camera']['timestamp'] = modified_camera_data[idx][1]
+                    for marker_idx in range(4):
+                        key = f'camera_pos_{marker_idx}'
+                        if key not in line_json:
+                            if modified_camera_data[idx][2][marker_idx] is not None:
+                                print(f"Warning: {key} not found in original but found in modified data.")
+                                return
+                        else:
+                            line_json[key]['position'] = modified_camera_data[idx][2][marker_idx]
+                            line_json[key]['rotation'] = modified_camera_data[idx][3][marker_idx]
+                    
+                    altered_file.write(json.dumps(line_json) + '\n')
+    
+    print(f"Altered data saved to {altered_filepath}")
+
+
+def visualize_results(processor: DataProcessor, marker_unit: int, display_all: int,
+                      ref_timestamps: np.ndarray, ref_data: list,
+                      all_camera_timestamps: list, all_camera_data: list):
+    """Run all visualizations."""
+    print("\n--- Visualizing Data ---")
+    
+    if display_all:
+        processor.visualize(mpu_units=[4], 
+                           sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], 
+                           fields=['position'])
+        processor.visualize(mpu_units=[4], 
+                           sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], 
+                           fields=['rotation'])
+        processor.visualize(mpu_units=[6], sensor_types=['auto-diff_vs_offset'], fields=['std'])
+        processor.visualize(mpu_units=[0, 4], 
+                           sensor_types=[f'camera_pos_{marker_unit}', 'encoder', 'camera', 'pressure'],
+                           fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
+        processor.visualize(mpu_units=[0], sensor_types=['pressure'], 
+                           fields=['depth0_diff', 'depth1_diff', 'depth0', 'depth1'])
+    
+    processor.visualize(mpu_units=[4], sensor_types=[f'camera_pos_{marker_unit}'], 
+                       fields=['timestamps_shifted'],
+                       ref_timestamps=ref_timestamps, ref_data=-1 * np.array(ref_data),
+                       all_camera_timestamps=all_camera_timestamps, all_camera_data=all_camera_data)
+    
+    plt.show(block=True)
+
+
 if __name__ == "__main__":
+    # File selection
     filenames = []
     #filenames.extend(["all_runs_ordered"])
 
@@ -954,395 +1479,103 @@ if __name__ == "__main__":
     filenames.extend(["ChArUco Quad 3.8-4.5m", "ChArUco Quad 7-4.5m"])
     filenames.extend(["ArUco Quad 4.5-2m", "ArUco Quad 4.5-7m"])'''
 
-    filenames.extend(["ChArUco Quad 7-4.5m"])
-    #filenames.extend(["ChArUco Quad 7m run1"])
+    #filenames.extend(["ArUco Quad 4.5-7m"])
+    filenames.extend(["ChArUco Quad 2m run2"])
     #filenames.extend(["altered/ChArUco Quad 7m run1"])
 
-    # Time correction variables
-    marker_unit = 4 #0, 1, 2 or 3. Use 4 for the average of the others.
-    display_all = 1
-    rising_edge = 1
-    offset_encoder = False
-    replace_erronious_pos = True
-    time_correction = 628.49 # Time correction in ms for camera data
-    save_altered_data = False # Save altered data to file 
-    auto_correction_range = [-2000, 4000] # Range for auto-correction in ms
-    camera_pos_offset_ref = 1.3895 # Expected camera y-position offset in meters, based on quad marker data
-
-
+    # Load configuration
+    cfg = Config
+    
+    # Load and process data
     filepaths = [f"recordings/{name}.json" for name in filenames]
     processor = DataProcessor(filepaths)
     processor.load_data()
 
-    # Set camera timestamps to averaged timestamps
-    averaged_timestamps = processor.process_data_timings("result") # "result" or "raw"
+    # Process camera timestamps
+    timestamp_lines = 0
+    averaged_timestamps = processor.process_data_timings("result")
     for data in processor.data:
         if data['mpu_unit'] == 4:
             data['camera']['timestamp'] = averaged_timestamps[timestamp_lines]
             timestamp_lines += 1
     if timestamp_lines != len(averaged_timestamps):
-        print("Warning: Mismatch in camera timestamps and averaged timestamps count. Stopping the process.")
+        print("Warning: Mismatch in camera timestamps and averaged timestamps count. Stopping.")
         exit(1)
 
+    # Get marker configuration
+    quad_marker_pos, quad_marker_rot = get_marker_config()
 
+    # Apply pose corrections
+    modified_camera_data = apply_pose_corrections(
+        processor, quad_marker_pos, quad_marker_rot, cfg.time_correction
+    )
 
-    MARKERS_Z_LEVEL = -0.3+0.1124
-    QUAD_MARKER_POS = [[1.5, 0.0], [0.0, 1.5], [-1.5, 0.0], [0.0, -1.5]]
-    squares_vertically = 3
-    square_length = 0.500/squares_vertically # Real world length of each square in meters
-    corner_offset = square_length*squares_vertically/2
-
-    quad_order = [3, 0, 1, 2]
-    quad_marker_pos = [
-        [QUAD_MARKER_POS[quad_order[0]][0] + corner_offset, QUAD_MARKER_POS[quad_order[0]][1] - corner_offset, MARKERS_Z_LEVEL],
-        [QUAD_MARKER_POS[quad_order[1]][0] + corner_offset, QUAD_MARKER_POS[quad_order[1]][1] + corner_offset, MARKERS_Z_LEVEL],
-        [QUAD_MARKER_POS[quad_order[2]][0] - corner_offset, QUAD_MARKER_POS[quad_order[2]][1] - corner_offset, MARKERS_Z_LEVEL],
-        [QUAD_MARKER_POS[quad_order[3]][0] + corner_offset, QUAD_MARKER_POS[quad_order[3]][1] - corner_offset, MARKERS_Z_LEVEL]
-    ]
-    quad_marker_rot = [[0,0,180], [0,0,180], [0,0,180], [0,0,180]]
-    # 2: 0 0 0, 0 0 180, 0 180 0
-    modified_camera_data = []
-    # Modify data that is erronious
-    for data in processor.data:
-        if data['mpu_unit'] == 4:
-            average_pos = []
-            average_rot = []
-            modified_camera_data.append([data['recv_time'], int(data['camera']['timestamp'] + round(time_correction)), 
-                                        [None, None, None, None], [None, None, None, None]])
-            for marker_idx in range(4):
-                if 'camera_pos_'+str(marker_idx) not in data:
-                    continue
-
-                marker_order = [[0,2], [1,2], [2,2], [3,2]] # LIKELY NOT ALL CORRECT
-                corrected_pose = False
-                if replace_erronious_pos:
-                    (camera_pos, camera_rot), error_scores, corrected_pose = manta.alter_to_correct_pose(
-                        data['camera_pos_'+str(marker_idx)]['position'],
-                        data['camera_pos_'+str(marker_idx)]['rotation'],
-                        [quad_marker_pos[marker_order[marker_idx][0]], quad_marker_rot[marker_order[marker_idx][1]]]
-                    )
-
-                    '''rots = [[0,0,0], [0,0,180], [0,180,0]]
-                    rvec2s = []
-                    for rots_vals in range(len(rots)):
-                        (camera_pos, camera_rot), error_scores, corrected_pose, tvec2, rvec2 = manta.alter_to_correct_pose2(
-                            data['camera_pos_'+str(marker_idx)]['position'],
-                            data['camera_pos_'+str(marker_idx)]['rotation'],
-                            [quad_marker_pos[marker_order[marker_idx][0]], rots[rots_vals]]
-                        )
-                        rvec2s.append(rvec2)
-                    
-                    # construct rvec2 with x from 0, y from 1 and z from 2
-                    rvec2 = np.array([rvec2s[0][0], rvec2s[1][1], rvec2s[2][2]])
-                    
-                    camera_pos, camera_rot = manta.calculate_camera_position2(
-                        tvec2, rvec2, [quad_marker_pos[marker_order[marker_idx][0]], quad_marker_rot[marker_order[marker_idx][1]]]
-                    )
-
-                    # Make rvec2 into degrees
-                    rvec2 = np.rad2deg(rvec2)
-                    for i in range(3):
-                            if rvec2[i] > 90:
-                                rvec2[i] -= 180
-                            elif rvec2[i] < -90:
-                                rvec2[i] += 180
-                    
-                    data['camera_pos_'+str(marker_idx)]['tvec2'] = tvec2
-                    data['camera_pos_'+str(marker_idx)]['rvec2'] = rvec2'''
-
-                    if corrected_pose:
-                        # Shift rotational calculation error
-                        for i in range(3):
-                            if camera_rot[i] > 90:
-                                camera_rot[i] -= 180
-                            elif camera_rot[i] < -90:
-                                camera_rot[i] += 180
-                        data['camera_pos_'+str(marker_idx)]['position'] = camera_pos
-                        data['camera_pos_'+str(marker_idx)]['rotation'] = camera_rot
-                        modified_camera_data[-1][2][marker_idx] = camera_pos.tolist()
-                        modified_camera_data[-1][3][marker_idx] = camera_rot.tolist()
-                    else:
-                        print("Warning: did not correct pose for marker", marker_idx, "at timestamp", data['camera']['timestamp'])
-                    
-                    # Notify if the error values are too similar to each other
-                    if abs(error_scores[0] - error_scores[1]) < 0.1:
-                        print(f"Warning: Error values for marker {marker_idx} at timestamp {data['camera']['timestamp']} are too similar: {error_scores[0]} and {error_scores[1]}")
-
-                average_pos.append(data['camera_pos_'+str(marker_idx)]['position'])
-                average_rot.append(data['camera_pos_'+str(marker_idx)]['rotation'])
-
-            if len(average_pos) > 0:
-                average_pos = np.mean(np.stack(average_pos, axis=0), axis=0)
-                average_rot = np.mean(np.stack(average_rot, axis=0), axis=0)
-                data['camera_pos_4'] = {
-                    'position': average_pos,
-                    'rotation': average_rot
-            }
-                
-    #extracted = processor.extract_all_data()
-    #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['position'])
-    #plt.show(block=True)
-
-    # Get the offset from zero for the camera data by averaging all values within the first 1000ms
-    camera_data = []
-    camera_data_ext = []
-    camera_timestamps = []
-    ref_data = []
-    ref_timestamps = []
-    initial_timestamp = None
-    for data in processor.data:
-        if data['mpu_unit'] == 4:
-            if 'camera_pos_'+str(marker_unit) not in data:
-                continue
-            if initial_timestamp is None:
-                initial_timestamp = data['camera']['timestamp']
-            
-            if data['camera']['timestamp'] - initial_timestamp < 1000:
-                camera_data.append(data['camera_pos_'+str(marker_unit)]['position'][1])
-            else:
-                camera_data_ext.append(data['camera_pos_'+str(marker_unit)]['position'][1])
-            camera_timestamps.append(data['camera']['timestamp'])
-        if data['mpu_unit'] == 0:
-            if 'encoder' not in data:
-                continue
-            ref_data.append(data['encoder']['distance'])
-            ref_timestamps.append(data['encoder']['timestamp'])
+    # Extract camera and encoder data
+    extracted = extract_camera_encoder_data(processor, cfg.marker_unit)
     
-    if camera_data:
-        camera_data = np.array(camera_data)
-
-        camera_pos_offset = np.mean(camera_data, axis=0)
-        print(f"\nCamera position offset: {camera_pos_offset:2.4f} +- {np.std(camera_data, axis=0):.5f} (# vals: {len(camera_data)})")
-        if abs(camera_pos_offset-camera_pos_offset_ref) > 0.1:
-            print(f"Warning: Camera position offset is significantly different from expected value ({camera_pos_offset_ref}m). Using the expected value instead.")
-            camera_pos_offset = camera_pos_offset_ref
-
-        camera_data = np.append(camera_data, np.array(camera_data_ext))
-        if offset_encoder:
+    if len(extracted['camera_data']) > 0:
+        # Calculate position offset
+        camera_pos_offset = calculate_position_offset(
+            extracted['camera_data'], cfg.camera_pos_offset_ref
+        )
+        
+        # Combine all camera data
+        all_cam_data = np.append(extracted['camera_data'], extracted['camera_data_ext'])
+        
+        # Handle encoder offset if needed
+        if cfg.offset_encoder:
             for data in processor.data:
                 if data['mpu_unit'] == 0:
                     data['encoder']['distance'] -= camera_pos_offset
-            camera_data -= camera_pos_offset
+            all_cam_data -= camera_pos_offset
             camera_pos_offset = 0
         
-        # Find the closest camera timestamp to the encoder timestamp, and calculate the difference between the position values
-        pos_difference = []
-        camera_timestamps_shifted = [(camera_data-camera_pos_offset).tolist(),[]]
-        ref_timestamps = np.array(ref_timestamps)
-        for i in range(len(camera_data)):
-            closest_index = np.argmin(np.abs(camera_timestamps[i] - ref_timestamps + time_correction))
-            closest_index = min(closest_index, len(ref_data)-1)
-            if abs(camera_timestamps[i] - ref_timestamps[closest_index] + time_correction) > 500 and len(pos_difference):
-                pos_difference.append(pos_difference[-1])
-            else:
-                pos_difference.append(-ref_data[closest_index] - camera_data[i] + camera_pos_offset)
-
-            # Shift camera timestamps by the time_correction value
-            camera_timestamps_shifted[1].append(camera_timestamps[i] + time_correction)
-
-        # Compute the average of the differences within the specified range
-        std_vals = []
-        for i in range(auto_correction_range[0], auto_correction_range[1]+10, 10):
-            pos_diff = []
-            for j in range(len(camera_data)):
-                closest_index = np.argmin(np.abs(camera_timestamps[j] - ref_timestamps + i))
-                closest_index = min(closest_index, len(ref_data)-1)
-
-                if i in range(int(time_correction)//10*10-400, int(time_correction)//10*10+450, 50):
-                    if i < int(time_correction)-15 or i > int(time_correction)+15:
-                        if j == 0:
-                            camera_timestamps_shifted.append([])
-                        camera_timestamps_shifted[-1].append(camera_timestamps[j] + i)
-
-                if abs(camera_timestamps[j] - ref_timestamps[closest_index] + i) > 500:
-                    continue # Skip if the difference is too large
-                pos_diff.append(-ref_data[closest_index] - camera_data[j])
-            
-            # Get indices of values further than 2 std from the mean
-            pos_diff = np.array(pos_diff)[np.abs(pos_diff - np.mean(pos_diff)) < 2*np.std(pos_diff)]
-
-            std_vals.append([i, np.std(pos_diff)])
-
-            processor.data.append({
-                'mpu_unit': 6,
-                'auto-diff_vs_offset': {
-                    'timestamp': i,
-                    'mean': np.mean(pos_diff),
-                    'std': std_vals[-1][1]
-                }
-            })
-
-        camera_timestamps_shifted = np.array(camera_timestamps_shifted)
-
-        lowest_offset = np.argmin([x[1] for x in std_vals])
-        if lowest_offset < 100:
-            lowest_offset = 100
-        elif lowest_offset > len(std_vals)-100:
-            lowest_offset = len(std_vals)-100
-
-        # Create a 2nd order best fit of the data around the lowest offset to find the theoretical best offset
-        # Convert std_vals to numpy array for array indexing
-        std_vals = np.array(std_vals)
-        std_range = std_vals[lowest_offset-100:lowest_offset+100]
-        y_curve = np.poly1d(np.polyfit(std_range[:, 0], std_range[:, 1], 8))
-        y_fit = y_curve(std_vals[:, 0])
-        y_fit += 0.02*(np.max(std_vals[:, 1])-np.min(std_vals[:, 1]))
-        y_fit[:lowest_offset-100] = np.max(std_vals[:, 1])
-        y_fit[lowest_offset+100:] = np.max(std_vals[:, 1])
+        # Find optimal time offset
+        offset_result = find_optimal_time_offset(
+            all_cam_data, extracted['camera_timestamps'],
+            extracted['ref_data'], extracted['ref_timestamps'],
+            cfg.auto_correction_range, cfg.time_correction
+        )
         
-        best_offset = np.argmin(y_fit)
-        y_fit[best_offset] = np.max(std_vals[:, 1])
-
-        # Improve the best offset by doing detailed search around the best offset
-        detailed_range = np.arange(std_vals[max(best_offset-10,0)][0], std_vals[max(best_offset+10,20)][0], 0.01)
-        best_offset_improved = detailed_range[np.argmin(y_curve(detailed_range))]
-
-        idx = 0
-        for data in processor.data:
-            if data['mpu_unit'] == 6:
-                if 'auto-diff_vs_offset' not in data:
-                    continue
-                data['auto-diff_vs_offset']['std'] = [data['auto-diff_vs_offset']['std'], y_fit[idx]]
-                idx += 1
-
-        print(f"\nBest offset for camera data: {best_offset_improved:.2f} ms (closest: {std_vals[best_offset][0]} & std: {std_vals[best_offset][1]:.4f})")
-
-        idx = 0
-        ref_pos_diff = 0
-        pos_difference = np.array(pos_difference)
-        for data in processor.data:
-            if data['mpu_unit'] == 4:
-                if 'camera_pos_'+str(marker_unit) not in data:
-                    continue
-                data['camera_pos_'+str(marker_unit)]['timestamps_shifted'] = camera_timestamps_shifted[:, idx]
-                if idx >= len(pos_difference):
-                    break
-                if np.abs(pos_difference[idx] - np.mean(pos_difference)) > 2*np.std(pos_difference) and idx > 0:
-                    data['camera_pos_'+str(marker_unit)]['enc-cam_diff'] = ref_pos_diff
-                else:
-                    data['camera_pos_'+str(marker_unit)]['enc-cam_diff'] = pos_difference[idx]
-                    ref_pos_diff = pos_difference[idx]
-                idx += 1
-
-    # Create a new data entry for the camera data that checks the timestamp difference between the camera y-value and the encoder value for a specific position value
-    for data in processor.data:
-        if data['mpu_unit'] == 4:
-            if 'camera_pos_'+str(marker_unit) not in data:
-                continue
-
-            position_val = data['camera_pos_'+str(marker_unit)]['position'][1] - camera_pos_offset
-            position_timestamp = data['camera']['timestamp'] + time_correction
-            for data_ref in processor.data:
-                if data_ref['mpu_unit'] == 0:
-                    if data_ref['encoder']['timestamp'] < position_timestamp-2000:
-                        continue
-                    if (-data_ref['encoder']['distance'] > position_val if rising_edge else -data_ref['encoder']['distance'] < position_val):
-                        if abs(position_timestamp - data_ref['encoder']['timestamp']) > 1000:
-                            for data_ref_inner in processor.data:
-                                if data_ref_inner['mpu_unit'] == 0:
-                                    if data_ref_inner['encoder']['timestamp'] < position_timestamp-2000:
-                                        continue
-                                    if (-data_ref_inner['encoder']['distance'] < position_val if rising_edge else -data_ref_inner['encoder']['distance'] > position_val):
-                                        data['camera_pos_'+str(marker_unit)]['time_offset'] = min(max(-1000, position_timestamp - data_ref_inner['encoder']['timestamp']), 1000)
-                                        break
-                                    else:
-                                        data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
-                        else:
-                            data['camera_pos_'+str(marker_unit)]['time_offset'] = position_timestamp - data_ref['encoder']['timestamp']
-                        break
-                    else:
-                        data['camera_pos_'+str(marker_unit)]['time_offset'] = 0
-
-            if not offset_encoder:
-                data['camera_pos_'+str(marker_unit)]['position'][1] = data['camera_pos_'+str(marker_unit)]['position'][1] - camera_pos_offset
-
-    # Visualize all camera datas, including the time offset and pos correction
-    all_camera_data = [[], [], [], [], []]
-    all_camera_timestamps_corrected = [[], [], [], [], []]
-    for data in processor.data:
-        if data['mpu_unit'] == 4:
-            for i in range(5):
-                if 'camera_pos_'+str(i) not in data:
-                    continue
-                offset = 0 if i == 4 else camera_pos_offset
-                all_camera_data[i].append(data['camera_pos_'+str(i)]['position'][1] - offset)
-                all_camera_timestamps_corrected[i].append(data['camera']['timestamp'] + time_correction)
+        # Use auto-corrected time offset if manual is None, otherwise use manual
+        if cfg.time_correction is None:
+            time_correction = offset_result['best_offset']
+            print(f"Using auto-corrected time offset: {time_correction:.2f} ms")
+        else:
+            time_correction = cfg.time_correction
+            print(f"Using manual time correction: {time_correction:.2f} ms (auto found: {offset_result['best_offset']:.2f} ms)")
+        
+        # Apply time corrections
+        pos_difference = apply_time_corrections(
+            processor, all_cam_data, extracted['camera_timestamps'],
+            extracted['ref_data'], extracted['ref_timestamps'],
+            time_correction, camera_pos_offset, offset_result, cfg.marker_unit
+        )
+        
+        # Calculate time offsets by position matching
+        calculate_time_offsets_by_position(
+            processor, cfg.marker_unit, camera_pos_offset,
+            time_correction, cfg.rising_edge, cfg.offset_encoder
+        )
+        
+        # Collect all camera data for visualization
+        all_camera_data, all_camera_timestamps_corrected = collect_all_camera_data(
+            processor, camera_pos_offset, time_correction
+        )
+        
+        # Save altered data if requested
+        if len(filepaths) == 1 and 'altered' not in filepaths[0] and cfg.save_altered_data:
+            save_altered_recording(filepaths[0], modified_camera_data)
     
-
-    # Save altered camera data to a file based on the original data file
-    if len(filepaths) == 1 and 'altered' not in filepaths[0] and save_altered_data:
-        altered_filepath = filepaths[0].split('/')[0] + '/altered/' + filepaths[0].split('/')[1]
-        altered_file = open(altered_filepath, 'w', encoding='utf-8')
-        with open(filepaths[0], 'r', encoding='utf-8') as f:
-            for line in f:
-                altered_file.write(line)
-                if '"mpu_unit": 4' in line:
-                    line_json = json.loads(line)
-                    line_json['mpu_unit'] = 5
-
-                    # Find the matching entry in modified_camera_data
-                    try:
-                        idx = next(i for i, row in enumerate(modified_camera_data) if row[0] == line_json['recv_time'])
-                    except StopIteration:
-                        print("Warning: No matching timestamp found for the camera data. Stopping the process.")
-                        exit(1)
-
-                    line_json['camera']['timestamp'] = modified_camera_data[idx][1]
-                    for marker_idx in range(4):
-                        if 'camera_pos_'+str(marker_idx) not in line_json:
-                            if modified_camera_data[idx][2][marker_idx] is not None:
-                                print(f"Warning: camera_pos_{marker_idx} not found in the original data, but found in the modified data. Stopping the process.")
-                                exit(1)
-                        else:
-                            line_json['camera_pos_'+str(marker_idx)]['position'] = modified_camera_data[idx][2][marker_idx]
-                            line_json['camera_pos_'+str(marker_idx)]['rotation'] = modified_camera_data[idx][3][marker_idx]
-                    
-                    altered_file.write(json.dumps(line_json) + '\n')
-                
-        altered_file.close()
-        print(f"Altered data saved to {altered_filepath}")
-
-    # Compare pressure depths to z-axis encoder values
-    encoder_entries = [d for d in processor.data if d.get('mpu_unit') == 1] # Get encoder entries from MPU unit 1
-    for data in processor.data:
-        if data['mpu_unit'] == 0:
-            # Find the closest encoder entry to the pressure timestamp
-            closest = min(encoder_entries, key=lambda x: abs(x['encoder']['timestamp'] - data['pressure']['timestamp']))
-            # Store the difference between pressure depths and encoder distance
-            data['pressure']['depth0_diff'] = data['pressure']['depth0'] - closest['encoder']['distance']
-            data['pressure']['depth1_diff'] = data['pressure']['depth1'] - closest['encoder']['distance']
-
-    extracted = processor.extract_all_data()
-
-    #print("\n--- Aligning Data ---")
-    #aligned_data = processor.align_data(reference_sensor='encoder', reference_mpu=1)
-    # Print preview of aligned data
-    #print("\n--- Data Preview ---")
-    #processor.print_data(sensor_types=['acceleration'], mpu_units=[0, 1, 4], num_rows=5)
-
-    # Visualize specific aligned data
-    # Plot acceleration (x, y, z) from MPU 0 and pressure depth0 from MPU 0 & 3
-    print("\n--- Visualizing Data ---")
-    #processor.visualize(mpu_units=[0], sensor_types=['acceleration'], fields=['x', 'y', 'z'])
-    #processor.visualize(mpu_units=[0], sensor_types=['gyroscope'], fields=['x', 'y', 'z'])
-    #processor.visualize(mpu_units=[0], sensor_types=['acceleration','integ_pos'], fields=['x', 'y', 'z'])
-    #processor.visualize(mpu_units=[0, 3], sensor_types=['pressure'], fields=['depth0', 'depth1'])
-    if display_all:
-        processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], fields=['position'])
-        processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'camera_pos_4'], fields=['rotation'])
-    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
-    #processor.visualize(mpu_units=[4], sensor_types=['camera_pos_0', 'camera_pos_1', 'camera_pos_2', 'camera_pos_3'], fields=['rotation'])
+    # Compare pressure to encoder
+    compare_pressure_to_encoder(processor)
     
-    #processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_3', 'camera_pos_2', 'camera_pos_1', 'camera_pos_0', 'global_pos', 'integ_pos'], fields=['position', 'x', 'y', 'z'])
-
-    if display_all:
-        processor.visualize(mpu_units=[6], sensor_types=['auto-diff_vs_offset'], fields=['std'])
-        processor.visualize(mpu_units=[0, 4], sensor_types=['camera_pos_'+str(marker_unit), 'encoder', 'camera', 'pressure'], 
-                            fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
-        processor.visualize(mpu_units=[0], sensor_types=['pressure'], fields=['depth0_diff', 'depth1_diff', 'depth0', 'depth1'])
-    processor.visualize(mpu_units=[4], sensor_types=['camera_pos_'+str(marker_unit)], fields=['timestamps_shifted'],
-                        ref_timestamps = ref_timestamps, ref_data = -1*np.array(ref_data), 
-                        all_camera_timestamps = all_camera_timestamps_corrected, all_camera_data = all_camera_data)
+    # Extract all data
+    extracted_data = processor.extract_all_data()
     
-    # Run matplotlib event loop to keep the plots open
-    plt.show(block=True)
+    # Visualize
+    visualize_results(
+        processor, cfg.marker_unit, cfg.display_all,
+        extracted['ref_timestamps'], extracted['ref_data'],
+        all_camera_timestamps_corrected, all_camera_data
+    )
