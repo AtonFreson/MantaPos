@@ -6,7 +6,7 @@ from matplotlib.animation import FuncAnimation
 
 # Configuration
 DATA_DIRECTORY = 'recordings'
-DATA_FILE = 'ChArUco Quad 7m run2'
+DATA_FILE = 'ArUco Quad 7m run1'
 display_only_avg = False
 display_gradient = False
 PLAYBACK_SPEED = 4  # 4x speed

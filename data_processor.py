@@ -327,7 +327,7 @@ class DataProcessor:
                 for direction in ['x', 'y', 'z']:
                     if 'timestamp' in accel_data and direction in accel_data:
                         ts = accel_data['timestamp']
-                        a_dir = accel_data[direction]#.copy() # Copy to avoid modifying original data
+                        a_dir = accel_data[direction].copy() # Copy to avoid modifying original data
                         
                         # Center the acceleration data around 0 for integration
                         #a_dir -= np.mean(a_dir)
@@ -954,6 +954,7 @@ class Config:
     #time_correction = 628.49  # Time correction in ms for camera data, good for ChArUco
     time_correction = None  # Set to None for auto-correction, or specify manual value in ms
     save_altered_data = False
+    filename = "ArUco Quad 7m run1" # Set to None if using multi-file processing, selected in main
     auto_correction_range = [-2000, 4000] # Good for ChArUco
     #auto_correction_range = [-6000, 0] # Good for ArUco
     #auto_correction_range = [-3000, 3000] # Good for ArUco 2m
@@ -1444,6 +1445,8 @@ def visualize_results(processor: DataProcessor, marker_unit: int, display_all: i
                            fields=['position', '-distance', 'time_offset', 'enc-cam_diff'])
         processor.visualize(mpu_units=[0], sensor_types=['pressure'], 
                            fields=['depth0_diff', 'depth1_diff', 'depth0', 'depth1'])
+        processor.visualize(mpu_units=[0], sensor_types=['acceleration', 'gyroscope', 'integ_pos'], 
+                           fields=['x', 'y', 'z'])
     
     processor.visualize(mpu_units=[4], sensor_types=[f'camera_pos_{marker_unit}'], 
                        fields=['timestamps_shifted'],
@@ -1487,7 +1490,10 @@ if __name__ == "__main__":
     cfg = Config
     
     # Load and process data
-    filepaths = [f"recordings/{name}.json" for name in filenames]
+    if cfg.filename is not None:
+        filepaths = [f"recordings/{cfg.filename}.json"]
+    else:
+        filepaths = [f"recordings/{name}.json" for name in filenames]
     processor = DataProcessor(filepaths)
     processor.load_data()
 
