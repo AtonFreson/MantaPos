@@ -1,0 +1,685 @@
+You asked:
+----------
+
+![JSON icon](https://drive-thirdparty.googleusercontent.com/32/type/text/code)
+
+sample-dataset
+
+JSON
+
+You said
+
+I have around 60k lines of data (divided among 36 seperate json files) that looks like this 22 line sample-dataset.json. 
+
+  
+
+In it there is position data from aruco markers (x, y, z), rotation data from aruco markers (rotx, roty, rotz), position data from 2 pressure sensor pairs (z), acceleration data from the accelerometer (ddx, ddy, ddz), and rotational acceleration data from the accelerometer (dd rotx, dd roty, dd rotz). All these values are timestamped individually at their own rates (thus not at the same time, rather when the sensors update). There is also a reference/ground truth position (x,y,z) (also timestamped, and at its own rate). All the sensor clocks are synced however, but the timing they appear in the .json will not be in order.
+
+  
+
+I want to use the data in a kalman filter to estimate the position, the performance is given by the difference to the reference.
+
+  
+
+A few quick caveats:
+
+\* The rotational data from the aruco markers is generally erroneous due to math errors during collection, so it is thus likely not useful/has a large error.
+
+\* The physical system has movements only in 2 dimensions, along y and z, as it is mounted between 2 vertical rails and with movement possible left-right along the track sitting between the rails.
+
+\* The rails and track are rigid, and thus there is no large scale rotation delta during movement outside of normal vibrations.
+
+\* The orientation stays constant on the rail the whole time.
+
+\* There is no rotational reference position, as it is not needed from a requirements perspective.
+
+\* Data collection is at fixed depths of around 2, 4.5 and 7 meters in z, and is only performed with left-right motion. Thus the movement is 1-dimensional, and with no rotation delta in theory.
+
+\* It is not guaranteed that the left-right movement is fully in the y direction, as the track might not be at the same height on the 2 rails (they are 3 meters apart).
+
+  
+
+The important output is only the position, as there is a reference for it. But the rotation reference can also be assumed to be constant, due to the physical constraints.
+
+  
+
+Let's start with the theory:
+
+What type of kalman filter is best suited for this application, and why? Compare a few different ones.
+
+---
+
+Gemini Replied:
+---------------
+
+Show thinking
+
+**Defining the Core Problem**
+
+I've defined the user's objective and data characteristics, focusing on Kalman Filter suitability.
+
+**Refining the Model**
+
+I've simplified the system dynamics to linear kinematics within a tilted 1D track, and measurement models are mostly linear.
+
+**Analyzing Asynchronous Data**
+
+I have identified the asynchronous nature of the sensor data as the central challenge to address in my approach.
+
+**Evaluating Filter Choices**
+
+I've outlined why an Extended Kalman Filter may be unnecessary, and the benefits of an ESKF.
+
+Gemini said
+-----------
+
+This is a fascinating dataset and a great problem to solve. Your physical constraints—specifically the rigid rails, the lack of significant rotation, and the effectively 1D/2D movement—are a massive advantage. They take what is usually a complex, highly non-linear 6 Degrees of Freedom (6-DOF) problem and simplify it beautifully.
+
+The most critical factor in your dataset isn't actually the kinematics; it's the **asynchronous, multi-rate timestamps**. Because your sensors update independently and out of order, you cannot use a traditional fixed-step Kalman filter where every measurement is available at every epoch `k`. You need an architecture that predicts the state forward to the exact timestamp of the next available measurement, regardless of which sensor produced it.
+
+With that multi-rate architecture in mind, here is a comparison of the Kalman Filter variants suited for your application:
+
+### 1\. The Asynchronous Linear Kalman Filter (LKF)
+
+A standard Linear Kalman Filter assumes that the system dynamics and the measurement models can be represented by linear matrices.
+
+*   **Why it fits:** Because your orientation is constant, your system dynamics are purely linear kinematics. The transformation from your IMU's body frame to the global frame is a static rotation matrix. Your state vector only needs to track position and velocity, e.g.,
+    
+    $$
+    x=\left​yzv_{y}v_{z}​\right​
+    $$
+    
+*   **How it handles your data:** When an Aruco  $y,z$  measurement arrives, the filter updates only the position states. When a pressure  $z$  measurement arrives, it updates only the  $z$  state. When an IMU reading arrives, you use it in the prediction step to drive the kinematic model forward.
+    
+*   **Pros:** Computationally lightweight, highly stable, and perfectly suited for your fixed-orientation, linear-motion constraints.
+    
+*   **Cons:** It cannot dynamically estimate the tilt of the track. If the track's tilt (the relationship between  $y$  and  $z$  during left-right movement) is unknown and needs to be learned by the filter on the fly, a purely linear filter falls short because estimating an angle alongside position introduces non-linear trigonometry.
+    
+
+### 2\. The Extended Kalman Filter (EKF)
+
+The EKF is the robotics industry standard for sensor fusion. It handles non-linearities by linearizing the system equations around the current estimate using Taylor series expansions (Jacobians).
+
+*   **Why it fits:** If you decide you _must_ estimate the static pitch/tilt of the track dynamically (because the 3-meter rails aren't perfectly level), your state vector would need to include an angle  $\theta$ . The relationship between your 1D track velocity and the global  $y,z$  axes becomes  $v_{y}=v_{track}\cdot \cos \left(\theta \right)$  and  $v_{z}=v_{track}\cdot \sin \left(\theta \right)$ . This makes your state transition non-linear.
+    
+*   **Pros:** Extremely flexible. Allows you to estimate track alignment errors or calibration offsets simultaneously with the position.
+    
+*   **Cons:** Overkill if the track tilt can be pre-measured or assumed constant. Calculating Jacobians adds computational overhead (though minimal for 2D).
+    
+
+### 3\. The Error-State Kalman Filter (ESKF)
+
+The ESKF is typically the go-to algorithm for integrating IMU data. Instead of estimating the nominal state (position, velocity, orientation) directly, it estimates the _error_ in the state.
+
+*   **Why it fits:** It handles the high-frequency integration of the IMU in the background and only uses the Kalman Filter to correct the accumulated drift when a slower sensor (like Aruco or pressure) arrives.
+    
+*   **Pros:** Highly robust to IMU noise and the absolute best way to handle 3D rotations (quaternions).
+    
+*   **Cons:** Unnecessary complexity for your specific setup. The primary benefit of an ESKF is avoiding quaternion singularities and handling complex rotational dynamics. Since your rotation is locked and erroneous anyway, deploying an ESKF would mean writing a lot of matrix math for problems you don't physically have.
+    
+
+* * *
+
+### The Verdict
+
+For your specific setup, an **Asynchronous Linear Kalman Filter** is the most elegant and efficient choice, provided you can treat the track tilt as a static, known value (or zero).
+
+Because your rotation is fixed, you can pre-rotate your IMU acceleration data into the global frame using a static offset matrix before it ever touches the filter. From there, it is a straightforward linear kinematic problem: predict forward using time delta ( $dt$ ) and acceleration, and update using whatever sensor data just arrived.
+
+If you suspect the rail height difference is significant enough that the track tilt _must_ be estimated dynamically by the filter, then you should step up to an **Asynchronous EKF**.
+
+Would you like to start mapping out the exact State Vector and State Transition matrices for the Linear approach?
+
+---
+
+You asked:
+----------
+
+You said
+
+the data values are pre-recorded, and thus can be sorted after the whole file is read into ram. However, it should be passed to the filter as if it was fed in real time as that is the real application.
+
+  
+
+The problem this setup simulates is a 2d surface movement where the position needs to be determined continuously. thus rotation is also important during the movement. it's correct that it can be represented as a sole rotation around x however.
+
+  
+
+computational cost is not an issue, it is done on a desktop pc. The importance is in getting the best performing system.
+
+  
+
+please add 3 more options and compare them all.
+
+  
+
+Think longer about this issue, and look into the details here and online. I need it to work correctly as I don't want to try too many different methods.
+
+---
+
+Gemini Replied:
+---------------
+
+Show thinking
+
+**Clarifying The Data**
+
+I've clarified the context: 2D surface movement with rotation, from asynchronous sensor data in JSON format.
+
+**Defining the System**
+
+I've defined the 6-DOF state, sensor inputs (IMU, Aruco, pressure), and identified the non-linear dynamics from body-frame IMU data.
+
+**Expanding Estimation Options**
+
+I've significantly expanded estimation choices, exploring additional filters for nuanced comparisons, as requested.
+
+**Evaluating Filter Options**
+
+I've detailed six filter choices, comparing suitability considering performance constraints and sensor characteristics.
+
+I've examined the pros and cons of six filtering options to accurately estimate position and rotation, given sensor data.
+
+**Refining Filter Details**
+
+I've specified the mechanics of UKF, PF, and InEKF filters, considering non-linearity and error nuances.
+
+**Analyzing Filter Suitability**
+
+I've examined InEKF's faster convergence, its IMU integration benefits over EKF/UKF, and relevant Lie Group theory.
+
+**Comparing Filter Advantages**
+
+Now, I'm contrasting UKF's practical edge with InEKF's superior theoretical grounding for robust pose estimation.
+
+Gemini said
+-----------
+
+Got it. If the rotation around the X-axis ( $\theta _{x}$ ) is dynamic and must be tracked to correctly project your IMU accelerations into the global Y-Z plane, the system is fundamentally non-linear. The Linear Kalman Filter is officially off the table.
+
+Since computational cost is not a bottleneck and your primary goal is the highest possible accuracy on the first try, we can look at the heavy-hitters of estimation theory.
+
+Here is the complete lineup of 6 filters, including the 3 new advanced options, evaluated specifically for your asynchronous, multi-rate 3-DOF ( $y,z,\theta _{x}$ ) dataset.
+
+### The Baseline Options (Recap)
+
+*   **1\. Extended Kalman Filter (EKF):** The traditional industry standard. It handles the non-linear rotation math by using first-order Taylor series expansions (Jacobians) to linearize the equations at every time step.
+    
+    *   _Verdict:_ Prone to overconfidence and drift. Because it linearizes based on its _current_ estimate, if its current estimate is slightly wrong, the linearization is wrong, leading to a compounding error loop.
+        
+*   **2\. Error-State Kalman Filter (ESKF):** Tracks the _error_ instead of the nominal state.
+    
+    *   _Verdict:_ It is brilliant for 3D flight dynamics because it avoids quaternion singularities. However, since your rotation is purely 1D (around the X-axis), 2D rotation is commutative. The ESKF offers very little mathematical advantage over a standard EKF here.
+        
+
+* * *
+
+### The 3 Advanced Options
+
+#### 3\. Unscented Kalman Filter (UKF)
+
+Instead of forcing the non-linear equations into a linear box using calculus (Jacobians), the UKF embraces the non-linearity. It uses the "Unscented Transform" to deterministically select a small set of sample points called "sigma points". It passes these exact points through your actual non-linear IMU kinematic equations and then reconstructs the mean and covariance of the new state.
+
+*   **Pros:** It captures second and third-order non-linearities, making it inherently more accurate than the EKF. It completely eliminates the need to derive and code complex Jacobian matrices.
+    
+*   **Cons:** It requires more processing power than an EKF, but since you are running this on a desktop, this is irrelevant.
+    
+
+#### 4\. Particle Filter (PF) / Sequential Monte Carlo
+
+The Particle Filter throws out the assumption that your system's uncertainty is a neat, symmetric Gaussian bell curve. It scatters thousands of "particles" (hypothetical states) and propagates all of them forward. When an ArUco or Pressure measurement arrives, it weights the particles based on how closely they match the measurement, killing off the bad ones and multiplying the good ones.
+
+*   **Pros:** It is the ultimate brute-force method for highly non-linear systems and non-Gaussian noise. Because your ArUco rotation data is "erroneous due to math errors," the noise profile might be heavily skewed. The PF can handle that gracefully.
+    
+*   **Cons:** It is notoriously difficult to tune. You often encounter "particle deprivation" (where all particles collapse into a single wrong hypothesis). It requires immense computation, and extracting a smooth, continuous trajectory from a cloud of particles can be messy.
+    
+
+#### 5\. Invariant Extended Kalman Filter (InEKF)
+
+This is the modern state-of-the-art for robot pose estimation. It formulates the robot's state not as a standard vector, but as a matrix on a Lie Group—specifically  $SE\left(2\right)$  for your 2D planar movement with 1D rotation. It leverages invariant observer theory to ensure that the error dynamics of the system are mathematically state-independent.
+
+*   **Pros:** It solves the fundamental flaw of the standard EKF. Because the Jacobians in an InEKF do not depend on your current flawed state estimate, the filter does not suffer from false overconfidence. It converges incredibly fast and tracks IMU integration beautifully.
+    
+*   **Cons:** The math is heavily theoretical. Formulating your state and measurements as Lie Group matrices requires a very firm grasp of advanced linear algebra.
+    
+
+* * *
+
+### Comparison Matrix
+
+| Filter | Accuracy | Setup Complexity | Computational Cost | Best Trait |
+| --- | --- | --- | --- | --- |
+| EKF | Moderate | Moderate | Low | Easy to find tutorials. |
+| ESKF | Moderate | High | Low | Industry standard for 3D IMUs. |
+| UKF | High | Low/Moderate | High | No Jacobians, highly accurate. |
+| Particle | High | Very High | Very High | Handles bizarre noise profiles. |
+| InEKF | Absolute Best | Very High | Low/Moderate | Mathematically consistent, no drift. |
+
+Export to Sheets
+
+* * *
+
+### The Verdict: Which one to build?
+
+Since you explicitly stated: _"I need it to work correctly as I don't want to try too many different methods,"_ you should build an **Asynchronous Unscented Kalman Filter (UKF)**.
+
+Here is why it's the most pragmatic "first-try" winner for your dataset:
+
+1.  **Math is straightforward:** You don't need to learn Lie Group theory (InEKF) or derive Jacobians by hand (EKF). You just write your raw non-linear kinematic equations (how  $a_{y}$ ,  $a_{z}$ , and  $\omega _{x}$  integrate over time  $dt$ ) and let the sigma points do the heavy lifting.
+    
+2.  **Handles the quirks:** Your ArUco rotation is bad. In a UKF, you can set the measurement noise covariance ( $R$ ) for the ArUco  $\theta _{x}$  to a massive number. The filter will naturally rely on integrating your IMU gyroscope ( $\omega _{x}$ ) for short-term rotation, and will only use the highly-diluted ArUco rotation to prevent the gyro drift from compounding to infinity over long runs.
+    
+3.  **Perfect for Asynchronous Data:** You just maintain the UKF state. When _any_ sensor data arrives, you calculate the  $dt$  since the last update, propagate the sigma points forward using the IMU data, and then apply the measurement update using whichever sensor just arrived.
+    
+
+Would you like me to map out the exact State Vector ( $X$ ) and the Non-Linear State Transition function ( $f\left(x,dt\right)$ ) you will need to code for the UKF?
+
+---
+
+You asked:
+----------
+
+You said
+
+The aruco x direction data seems to vary by around +-3cm, paired with movement left-right. The 'fully random' noise is on top of this.
+
+  
+
+Some points on this:
+
+\* This might be due to badly calibrated camera parameters.
+
+\* It is not guaranteed the camera coordinates are fully aligned with the x-y plane and moves in the y direction
+
+\* It is not guaranteed the IMU coordinates are fully aligned with the x-y plane and moves in the y direction
+
+\* It is not guaranteed the IMU coordinates are fully aligned with the camera
+
+\* Pressure is along z, as determined by physics.
+
+  
+
+Can the filters account for this? The output position should be in the global coordinates as defined by the reference position (z is along the rails, y is orthogonally between the rails). Reference x is constant.
+
+---
+
+Gemini Replied:
+---------------
+
+Show thinking
+
+**Defining the Filter's Scope**
+
+I've scoped the Kalman Filter's position estimation problem for asynchronous, multi-rate sensor data.
+
+**Assessing Misalignment Impact**
+
+I've clarified filter capabilities for online misalignment estimation, focusing on coordinate transformations within states.
+
+**Observing Calibration Effects**
+
+I've confirmed observability constraints with added misalignments in UKF, and formulated state augmentation for real-world robotics issues.
+
+**Content Drafting Complete**
+
+I've drafted content validating sensor fusion complexities and detailed state augmentation for calibration learning.
+
+Gemini said
+-----------
+
+This is exactly where the rubber meets the road in real-world sensor fusion. What you are describing are classic **Extrinsic Calibration** errors. The physical sensors are mounted slightly crooked relative to each other and the track, and the camera’s intrinsic parameters might have slight distortions.
+
+The short answer is: **Yes, the Unscented Kalman Filter (UKF) can absolutely account for this.** It does this through a technique called **State Augmentation** (also known as Simultaneous State and Parameter Estimation). Because you are using a non-linear filter like the UKF, you don't just estimate your moving robot; you make the filter estimate the crookedness of the sensors on the fly.
+
+Here is how the filter handles each of your specific points:
+
+### 1\. The ArUco X-Variation (The "Yaw/Pitch Leak")
+
+If your track perfectly limits movement to the Y-Z plane, but your ArUco camera reports a  $\pm 3$  cm shift in X as the unit moves left and right along Y, your camera is likely rotated slightly relative to the rail (Yaw). As the unit moves sideways, it physically moves closer to or further from the camera's focal plane, causing Y-axis movement to "leak" into the X-axis measurement.
+
+*   **The Filter's Solution:** We add an alignment angle, let's call it  $\psi _{cam}$  (Camera Yaw), to the filter's state vector. The filter knows the true movement is in Y and Z. During the UKF measurement update, it takes its internal Y estimate, rotates it by  $\psi _{cam}$ , and predicts what the faulty ArUco X and Y values _should_ be. By comparing this prediction to the actual ArUco data over time, it naturally converges on the true value of  $\psi _{cam}$  and corrects the X-drift.
+    
+
+### 2\. IMU and Camera Misalignments
+
+You have three distinct coordinate frames: the Global frame (defined by the rails and gravity), the IMU frame, and the Camera frame. None of them perfectly align.
+
+*   **The Filter's Solution:** We handle this by defining static Rotation Matrices in the filter's math. We augment the state vector with the Euler angles representing the misalignment between the IMU and the Global frame ( $\theta _{imu_roll},\theta _{imu_pitch},\theta _{imu_yaw}$ ).
+    
+*   When the UKF integrates the IMU accelerations, it first multiplies them by this estimated rotation matrix to project them into the true Global Y-Z plane.
+    
+*   Because the UKF uses "Sigma Points" instead of manually derived Jacobians, passing your data through these trigonometric rotation matrices is computationally painless.
+    
+
+### 3\. Pressure is Strictly Z (Your Anchor)
+
+This is your saving grace. Because fluid pressure is dictated by gravity, it is perfectly aligned with the true global Z-axis.
+
+*   **Why this matters:** In Kalman filtering, this is called an "observable anchor." If your IMU is tilted, the filter might struggle to tell if the unit is accelerating or if gravity is just leaking into the Y-axis. The pressure sensor cuts through that ambiguity. It provides an absolute, un-tiltable reference for Z, which forces the filter to correctly calculate the IMU's pitch and roll offsets to make the math balance out.
+    
+
+* * *
+
+### The Architecture: The Augmented State Vector
+
+Instead of just tracking movement, your UKF state vector  $X$  expands to include the static errors. It looks something like this:
+
+$$
+X=\left​yzv_{y}v_{z}\theta _{cam_yaw}\theta _{imu_roll}\theta _{imu_pitch}​\right​
+$$
+
+The dynamic states ( $y,z,v_{y},v_{z}$ ) change based on physics equations and  $dt$ . The parameter states ( $\theta$ ) have a state transition of zero ( $\theta ˙=0$ )—meaning the filter assumes they are constant static values, but it constantly refines its estimate of what those constants are every time a new sensor reading arrives.
+
+### The Engineering Reality Check (Observability)
+
+While the UKF _can_ do this, there is a limit. You cannot ask the filter to estimate 12 different misalignment angles simultaneously if you only have 1D left-right movement. If the system doesn't move in a specific axis, the filter doesn't get the dynamic data required to separate a sensor bias from a physical tilt (this is called "unobservable" state).
+
+**The Strategy:** Don't try to estimate everything online at once.
+
+1.  Assume the ArUco rotation data is pure noise and ignore it entirely.
+    
+2.  Use the Augmented UKF to estimate the _Camera Yaw_ (to fix the X-leak) and the _IMU Roll/Pitch_ (to align acceleration with the rails).
+    
+3.  Let the Pressure sensor act as the ground-truth anchor for the Z-axis.
+    
+
+Would you like to see how the non-linear measurement function  $h\left(x\right)$  is formulated to mathematically rotate the IMU and Camera frames within the UKF?
+
+---
+
+You asked:
+----------
+
+You said
+
+looking at it I can see a similar but less obvious leak in the aruco z value, thus it also needs to be estimated (thus all of roll pitch yaw right?). also, you missed the imu\_yaw value
+
+---
+
+Gemini Replied:
+---------------
+
+Show thinking
+
+**Understanding the UKF**
+
+I've pinpointed that complete camera pose estimation, now needs all 3 rotation axes.
+
+**Refining the State Model**
+
+I've determined incorporating IMU yaw and camera roll/pitch/yaw is essential for a complete 3D pose state vector.
+
+**Analyzing Observability**
+
+I've confirmed IMU yaw is observable with Y-axis movement, but camera roll observability remains questionable.
+
+**Validating the Roll Observation**
+
+I've confirmed roll observability with varied Z-depth Y-axis movement, and finalized state vector and content draft.
+
+Gemini said
+-----------
+
+You are absolutely right on both counts. That is a great catch.
+
+Missing the IMU yaw ( $\psi _{imu}$ ) was an oversight on my part. And your deduction about the ArUco  $z$ \-leak is spot on: if movement along the  $y$ \-axis is causing a phantom shift in the camera’s  $z$ \-axis, the camera is pitched relative to the rail.
+
+To mathematically lock this system down, we need to estimate the full 3D rotation (Roll, Pitch, Yaw) for **both** the IMU and the Camera coordinate frames relative to the Global rail frame.
+
+Here is how the physics and observability of that 10-state system break down.
+
+### The Full Augmented State Vector
+
+Your state vector  $X$  now tracks the core kinematics plus 6 static calibration angles (Euler angles):
+
+$$
+X=\left​yzv_{y}v_{z}\varphi _{imu}\theta _{imu}\psi _{imu}\varphi _{cam}\theta _{cam}\psi _{cam}​\right​
+$$
+
+### How the Filter "Learns" These Angles (Observability)
+
+Estimating 6 hidden angles using only 1D movement and a 1D pressure anchor sounds impossible, but the specific dynamics of your physical setup actually make it highly observable. Here is how the UKF naturally untangles them:
+
+**1\. The IMU Angles ( $\varphi _{imu},\theta _{imu},\psi _{imu}$ )**
+
+*   **Roll ( $\varphi _{imu}$ ) & Pitch ( $\theta _{imu}$ ):** These are instantly observable even when the system is sitting perfectly still. Gravity ( $9.81m/s^{2}$ ) acts purely on the Global  $z$ \-axis. If the IMU is rolled or pitched, a fraction of that  $9.81$  will leak into the IMU's local  $x$  or  $y$  accelerometers. The filter uses the Pressure sensor's absolute  $z$  anchor to deduce exactly how much the IMU is tilted to cause that specific gravity leak.
+    
+*   **Yaw ( $\psi _{imu}$ ):** This is observable _only_ when the unit is moving. Because the rails restrict physical acceleration to the  $y$ \-axis, true global  $x$ \-acceleration is zero. If the IMU is yawed, the physical  $y$ \-acceleration will register partially on the IMU's  $x$ \-axis. The filter sees acceleration on  $x$ , knows physical  $x$  is impossible, and adjusts  $\psi _{imu}$  until the mathematical projection zeros out the  $x$ \-acceleration.
+    
+
+**2\. The Camera Angles ( $\varphi _{cam},\theta _{cam},\psi _{cam}$ )**
+
+*   **Yaw ( $\psi _{cam}$ ):** As we discussed, movement along  $y$  leaks into the ArUco  $x$ \-measurement. The filter adjusts camera yaw to eliminate this correlation.
+    
+*   **Pitch ( $\theta _{cam}$ ):** Movement along  $y$  leaks into the ArUco  $z$ \-measurement. Because you have the highly accurate Pressure sensor defining true  $z$ , the filter will heavily trust the pressure data and adjust the camera pitch until the ArUco  $z$ \-data matches the pressure  $z$ \-data during a  $y$ \-axis sweep.
+    
+*   **Roll ( $\varphi _{cam}$ ):** This is the trickiest one. If the camera is rolled (spun like a dial), the perceived  $y$  and  $z$  axes are rotated. Because you are collecting data at three distinct depths (2m, 4.5m, 7m), the relationship between  $y$ \-movement and the resulting  $y/z$  ArUco coordinates will change slightly at each depth if there is a roll error. The filter will use data across these different depth runs to lock in the roll.
+    
+
+### The "Lever Arm" Caveat
+
+There is one more physical offset to consider before writing the code. We are estimating rotational misalignments, but what about **translational** misalignments?
+
+If the ArUco camera is mounted 10 cm above the IMU, and 5 cm to the right of the pressure sensor, the sensors are technically tracking slightly different physical paths. In sensor fusion, these are called "Lever Arm Offsets" ( $t_{x},t_{y},t_{z}$ ).
+
+Because you are using an Unscented Kalman Filter, you _could_ add these to the state vector and estimate them too. However, making the filter estimate 6 angles _and_ 6 lever arm offsets simultaneously from 1D movement is asking for divergence.
+
+**Best Practice:** Measure the physical distances (in meters) between the IMU, the Camera lens, and the Pressure sensor with a tape measure or calipers. Hardcode these translational offsets into your measurement model, and let the UKF focus its computational power purely on estimating the 6 rotational angles.
+
+Would you like to map out the mathematical state transition function  $f\left(x,dt\right)$  next, showing exactly how the IMU data integrates with these 3 IMU angles?
+
+---
+
+You asked:
+----------
+
+You said
+
+give the kalman filter equations
+
+---
+
+Gemini Replied:
+---------------
+
+Show thinking
+
+**Defining the UKF Scope**
+
+I've clarified the user's Kalman filter request within our UKF and sensor fusion context.
+
+Gemini said
+-----------
+
+Here are the mathematical equations for the **Asynchronous Unscented Kalman Filter (UKF)**, structured specifically for your multi-rate, 10-state architecture.
+
+Because your data arrives asynchronously, the time step  $\Delta t$  is not fixed. Every time _any_ sensor data packet is popped from your sorted dataset, you calculate  $\Delta t=t_{current}−t_{previous}$ , run the **Prediction Step** to catch the state up to the current time, and then run the **Update Step** using the specific sensor data that just arrived.
+
+### 1\. The State Vector & Weights Setup
+
+Let  $L=10$  be the number of states in your vector:
+
+$$
+x=\left[y​z​v_{y}​v_{z}​\varphi _{imu}​\theta _{imu}​\psi _{imu}​\varphi _{cam}​\theta _{cam}​\psi _{cam}​\right]^{T}
+$$
+
+The UKF uses deterministic "Sigma Points" to capture the mean and covariance. You need  $2L+1=21$  sigma points.
+
+First, calculate the weights for the mean ( $W_{im}$ ) and covariance ( $W_{ic}$ ). You choose scaling parameters  $\alpha$  (typically  $10^{−3}$ ),  $\beta$  (typically 2 for Gaussian distributions), and  $\kappa$  (typically 0).
+
+$$
+\lambda =\alpha ^{2}\left(L+\kappa \right)−L
+$$
+
+$$
+W_{0m}=\frac{\lambda }{L+\lambda }
+$$
+
+$$
+W_{0c}=\frac{\lambda }{L+\lambda }+\left(1−\alpha ^{2}+\beta \right)
+$$
+
+$$
+W_{im}=W_{ic}=\frac{1}{2\left(L+\lambda \right)}for i=1,...,2L
+$$
+
+* * *
+
+### 2\. Generating Sigma Points
+
+Before a prediction or update, generate the 21 sigma points based on your current state estimate  $x^_{k−1}$  and covariance matrix  $P_{k−1}$ . Let  $\gamma =\sqrt{L+\lambda }$ . We use the Cholesky decomposition of the covariance matrix:
+
+$$
+X_{0}=x^_{k−1}
+$$
+
+$$
+X_{i}=x^_{k−1}+\gamma \left(\sqrt{P_{k−1}}\right)_{i}for i=1,...,L
+$$
+
+$$
+X_{i+L}=x^_{k−1}−\gamma \left(\sqrt{P_{k−1}}\right)_{i}for i=1,...,L
+$$
+
+_(Where  $\left(\sqrt{P_{k−1}}\right)_{i}$  is the  $i$ \-th column of the lower triangular matrix)._
+
+* * *
+
+### 3\. The Prediction Step (Time Update)
+
+When a timestamp triggers, you push all 21 sigma points through your non-linear kinematic physics model  $f\left(X,\Delta t\right)$ .
+
+**The Kinematic Model  $f\left(X,\Delta t\right)$ :** For each sigma point, the angles remain constant, but the velocity and position update using the IMU accelerations ( $a_{x},a_{y},a_{z}$ ) rotated by the specific IMU angles contained _within that specific sigma point_.
+
+Let  $R_{imu}$  be the 3D rotation matrix formed by  $\varphi _{imu},\theta _{imu},\psi _{imu}$ . The true global acceleration is:
+
+$$
+\left​a_{global_x}a_{global_y}a_{global_z}​\right​=R_{imu}\left​a_{x}a_{y}a_{z}​\right​−\left​009.81​\right​
+$$
+
+Since physical movement is constrained to the Y-Z plane, we ignore  $a_{global_x}$  for integration (though it’s used to penalize yaw in the update step). The new dynamic states for each sigma point become:
+
+$$
+v_{y,k}=v_{y,k−1}+a_{global_y}\Delta t
+$$
+
+$$
+v_{z,k}=v_{z,k−1}+a_{global_z}\Delta t
+$$
+
+$$
+y_{k}=y_{k−1}+v_{y,k−1}\Delta t+\frac{1}{2}a_{global_y}\Delta t^{2}
+$$
+
+$$
+z_{k}=z_{k−1}+v_{z,k−1}\Delta t+\frac{1}{2}a_{global_z}\Delta t^{2}
+$$
+
+**Recombining the Predicted State:** After transforming all 21 points to get  $X_{k∣k−1}$ , you reconstruct the predicted mean state ( $x^_{k∣k−1}$ ) and predicted covariance ( $P_{k∣k−1}$ ).  $Q$  is your process noise matrix.
+
+$$
+x^_{k∣k−1}=\sum_{i=0}^{2L} W_{im}X_{i,k∣k−1}
+$$
+
+$$
+P_{k∣k−1}=\sum_{i=0}^{2L} W_{ic}\left(X_{i,k∣k−1}−x^_{k∣k−1}\right)\left(X_{i,k∣k−1}−x^_{k∣k−1}\right)^{T}+Q
+$$
+
+* * *
+
+### 4\. The Measurement Update
+
+Now, you apply the specific sensor measurement  $z_{k}$  that just arrived. The measurement function  $h\left(X\right)$  changes depending on the sensor.
+
+**If the measurement is Pressure (Z-axis only):** The predicted measurement for each sigma point is simply the  $z$  state.
+
+$$
+Y_{i}=h_{press}\left(X_{i}\right)=X_{i}\left[z\right]
+$$
+
+**If the measurement is ArUco (Camera X, Y, Z):** You must rotate the global Y-Z position into the camera's skewed frame using the camera angles in that sigma point ( $\varphi _{cam},\theta _{cam},\psi _{cam}$ ). Let  $R_{cam}$  be the rotation matrix from global to camera:
+
+$$
+Y_{i}=h_{aruco}\left(X_{i}\right)=R_{cam}\left​0X_{i}\left[y\right]X_{i}\left[z\right]​\right​+LeverArmOffsets
+$$
+
+**Calculating the Update:** First, calculate the expected measurement mean ( $y^​_{k}$ ):
+
+$$
+y^​_{k}=\sum_{i=0}^{2L} W_{im}Y_{i}
+$$
+
+Next, calculate the measurement covariance ( $P_{yy}$ ) and the state-measurement cross-covariance ( $P_{xy}$ ).  $R$  is the measurement noise matrix for the specific sensor.
+
+$$
+P_{yy}=\sum_{i=0}^{2L} W_{ic}\left(Y_{i}−y^​_{k}\right)\left(Y_{i}−y^​_{k}\right)^{T}+R
+$$
+
+$$
+P_{xy}=\sum_{i=0}^{2L} W_{ic}\left(X_{i,k∣k−1}−x^_{k∣k−1}\right)\left(Y_{i}−y^​_{k}\right)^{T}
+$$
+
+Finally, calculate the Kalman Gain ( $K$ ) and update your state and covariance:
+
+$$
+K=P_{xy}P_{yy−1}
+$$
+
+$$
+x^_{k}=x^_{k∣k−1}+K\left(z_{k}−y^​_{k}\right)
+$$
+
+$$
+P_{k}=P_{k∣k−1}−KP_{yy}K^{T}
+$$
+
+Once this is complete,  $x^_{k}$  is your new definitive position and orientation, ready for the next asynchronous timestamp.
+
+-----------------------
+You said
+
+The Zeroed IMU Challenge: this was found not to be true. it does in fact still contain gravity: "Gravity handling in your code:
+During matrix computation, gravity is used as the reference direction, with desired gravity set to (0,0,−1)
+
+(0,0,−1): mantaMCU.ino:321.
+In live data, gravity is currently not removed; the subtraction line is commented out: mantaMCU.ino:450.
+That means at rest you should see roughly aout≈(0,0,−g)
+
+aout
+​≈(0,0,−g), not near zero."
+
+Gemini Replied:
+---------------
+
+That correction is a game-changer for the initial stability of the filter. If the gravity vector is present in the raw accelerometer data (reading approximately $a_{out} \approx [0, 0, -9.81]$ at rest), the observability math shifts back to the more favorable "instant" alignment model.
+
+Here is the updated collation of findings and the finalized architecture, incorporating the fact that gravity is active and available.
+
+### 1. Updated Observability: The Gravity Advantage
+* **Instant IMU Roll and Pitch**: Because gravity is not subtracted at the hardware level, the IMU's roll ($\varphi_{imu}$) and pitch ($\theta_{imu}$) are **observable even when the system is stationary**.
+* **Gravity Leakage**: Any tilt in the IMU will cause a component of that $-9.81 m/s^2$ to "leak" into the local $x$ or $y$ accelerometer axes.
+* **Calibration at Rest**: The filter can now use the stationary gaps between your runs to perfectly converge on the IMU's mounting angles before the first movement even begins.
+
+### 2. Finalized Filter Architecture
+* **Filter Type**: Asynchronous Unscented Kalman Filter (UKF) to handle non-linear rotations and multi-rate sensor data.
+* **State Vector (10 States)**: 
+    $$X = [y, z, v_y, v_z, \varphi_{imu}, \theta_{imu}, \psi_{imu}, \varphi_{cam}, \theta_{cam}, \psi_{cam}]^T$$
+    This vector tracks 2D kinematics and 6 static extrinsic calibration angles.
+* **The Global Anchor**: The pressure sensor remains the primary anchor for the Global Z-axis, providing the absolute reference that prevents the IMU and Camera from "drifting" in pitch together.
+
+### 3. Sensor Fusion & Noise Handling
+* **IMU Yaw ($\psi_{imu}$)**: While roll and pitch are observable at rest, IMU yaw remains observable only during motion. The filter will deduce yaw by ensuring that physical $y$-acceleration does not mathematically "leak" into the Global X-axis.
+* **ArUco Rotation**: The erroneous ArUco rotation data will be effectively ignored by setting its measurement noise ($R$) extremely high.
+* **Camera Yaw ($\psi_{cam}$)**: The $\pm 3$ cm X-drift observed during Y-movement will be solved by the filter's estimation of camera yaw, which rotates the ArUco frame back into alignment with the rails.
+* **Intrinsic Skew**: Any residual non-planarity in the ArUco data (the "skewed plane") is likely an intrinsic calibration error and will be treated as a small, acceptable systematic bias in the residuals.
+
+### 4. Practical Implementation Details
+* **Continuous Timeline**: All 36 data files will be treated as one continuous stream, allowing the calibration angles learned in early runs to persist and refine throughout the entire dataset.
+* **Kinematic Prediction**: During the prediction step, the filter will rotate the raw accelerometer values by the estimated $R_{imu}$ and then subtract the global gravity vector ($[0, 0, -9.81]$) to find true linear acceleration.
+* **Lever Arm Offsets**: Physical distances between the IMU, Camera, and Pressure sensors should be measured manually and hardcoded into the measurement models rather than being estimated by the filter.
+
+---
+
+With gravity confirmed as part of the live signal, the "cold start" problem is significantly reduced. The filter will likely converge on its IMU roll and pitch estimates within the first few stationary seconds of your data.
+
+Since the theoretical plan is now fully aligned with your hardware reality, should we proceed to **defining the covariance matrices ($P, Q, R$)** to reflect this specific noise environment, or would you like to see the **non-linear measurement function ($h(x)$)** for the ArUco camera first?

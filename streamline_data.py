@@ -4,6 +4,37 @@ import glob
 
 def process_file(filepath):
     records = []
+    
+    # First pass: gather offsets
+    offsets = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if data.get("mpu_unit") == 3 and "pressure" in data:
+                ts = data["pressure"].get("timestamp")
+                if ts is not None:
+                    o0 = data["pressure"].get("depth_offset0")
+                    o1 = data["pressure"].get("depth_offset1")
+                    if o0 is not None and o1 is not None:
+                        offsets.append((ts, o0, o1))
+    
+    offsets.sort(key=lambda x: x[0])
+
+    def get_offset_for_ts(target_ts):
+        if not offsets:
+            return 0, 0
+        # Find most recent before target_ts
+        valid_offsets = [o for o in offsets if o[0] <= target_ts]
+        if valid_offsets:
+            return valid_offsets[-1][1], valid_offsets[-1][2]
+        # If none before, use the very first one
+        return offsets[0][1], offsets[0][2]
+
     with open(filepath, 'r') as f:
         for line in f:
             if not line.strip():
@@ -18,7 +49,14 @@ def process_file(filepath):
                 if "pressure" in data:
                     ts = data["pressure"].get("timestamp")
                     if ts is not None:
-                        val = {"depth0": data["pressure"].get("depth0"), "depth1": data["pressure"].get("depth1")}
+                        o0, o1 = get_offset_for_ts(ts)
+                        d0 = data["pressure"].get("depth0")
+                        d1 = data["pressure"].get("depth1")
+                        
+                        val = {}
+                        if d0 is not None: val["pressure_z0"] = -(d0 - o0)
+                        if d1 is not None: val["pressure_z1"] = -(d1 - o1)
+                        
                         records.append((ts, 'pressure_bottom', val))
                 if "encoder" in data:
                     ts = data["encoder"].get("timestamp")
@@ -36,18 +74,12 @@ def process_file(filepath):
                 if "encoder" in data:
                     ts = data["encoder"].get("timestamp")
                     if ts is not None:
-                        records.append((ts, 'ref_pos_z1', data["encoder"].get("distance")))
+                        records.append((ts, 'ref_pos_z1', -data["encoder"].get("distance")))
             elif unit == 2:
                 if "encoder" in data:
                     ts = data["encoder"].get("timestamp")
                     if ts is not None:
-                        records.append((ts, 'ref_pos_z2', data["encoder"].get("distance")))
-            elif unit == 3:
-                if "pressure" in data:
-                    ts = data["pressure"].get("timestamp")
-                    if ts is not None:
-                        val = {"depth_offset0": data["pressure"].get("depth_offset0"), "depth_offset1": data["pressure"].get("depth_offset1")}
-                        records.append((ts, 'pressure_top', val))
+                        records.append((ts, 'ref_pos_z2', -data["encoder"].get("distance")))
             elif unit == 4:
                 if "camera" in data:
                     ts = data["camera"].get("timestamp")

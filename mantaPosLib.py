@@ -1300,13 +1300,14 @@ def zero_marker_position(tvec, rvec, camera_position, camera_rotation):
     return marker_global.flatten(), marker_euler
 
 # Function to provide the global reference coordinate position of the camera system based on the depth and frame_pos encoder values.
-def global_reference_pos(z0, z1, frame_pos):
+def global_reference_pos(z0, z1, frame_pos, invert_z=True):
     if None in (z0, z1, frame_pos):
         return None, None
     
-    # Invert z0 and z1, since input is from the depth sensors
-    z0 = -z0
-    z1 = -z1
+    if invert_z:
+        # Invert z0 and z1, since input is from the depth sensors
+        z0 = -z0
+        z1 = -z1
 
     # Constants for the frame pool setup, in meters.
     adj = 3.1305 # Horizontal distance between the depth sensors.
@@ -1565,3 +1566,164 @@ class PositionSharedMemory:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+class MantaUKF:
+    """ Asynchronous Unscented Kalman Filter structured from KalmanSetup.txt. """
+    def __init__(self):
+        self.L = 10
+        # 10 States: [y, z, v_y, v_z, phi_imu, theta_imu, psi_imu, phi_cam, theta_cam, psi_cam]
+        self.x = np.zeros(self.L)
+        self.P = np.eye(self.L) * 0.1 # Covariance matrix
+        
+        # Extrinsic Lever Arm Offsets: Manual configuration based on physical hardware distances
+        self.r_imu_to_cg = np.array([0.0, 0.0, 0.0]) # Distance from CG to IMU
+        self.r_cam_to_cg = np.array([0.0, 1.3895, 0.0]) # Found camera_pos_offset in settings
+        self.r_pressure_to_cg = np.array([0.0, 0.0, 0.0]) 
+
+        # Process Noise Q and Measurement Noise Matrices R
+        self.Q = np.eye(self.L) * 0.001
+        # Inflate process noise slightly for angles to allow them to flexibly converge
+        for i in range(4, 10):
+            self.Q[i, i] = 1e-4
+            
+        self.R_cam = np.diag([0.01, 0.01, 0.01]) # X, Y, Z (Aruco X drift +-3cm)
+        self.R_pressure = np.diag([0.005, 0.005]) # Global Z Anchor (two sensors)
+        # Measurement noise for stationary accelerometer assumption
+        self.R_accel = np.diag([0.5, 0.5, 0.5]) 
+        
+        # UKF Parameters (Tuned for positive weights to guarantee P matrix stability)
+        self.alpha = 1.0  
+        self.beta = 0.0
+        self.kappa = 1.0  # L + kappa = 11
+        self.lam = self.alpha**2 * (self.L + self.kappa) - self.L # lam = 1.0
+        self.gamma = np.sqrt(self.L + self.lam)
+        
+        # Weights
+        self.Wm = np.full(2 * self.L + 1, 1.0 / (2 * (self.L + self.lam)))
+        self.Wc = np.full(2 * self.L + 1, 1.0 / (2 * (self.L + self.lam)))
+        self.Wm[0] = self.lam / (self.L + self.lam)
+        self.Wc[0] = self.lam / (self.L + self.lam) + (1 - self.alpha**2 + self.beta)
+        
+    def _generate_sigma_points(self):
+        sigma_points = np.zeros((2 * self.L + 1, self.L))
+        sigma_points[0] = self.x
+        
+        # Cholesky decomposition of P (ensure it is positive definite)
+        # Symmetrize and add a small jitter to diagonal to avoid numerical instability
+        self.P = (self.P + self.P.T) / 2.0
+        P_safe = self.P + np.eye(self.L) * 1e-8
+        try:
+            L_matrix = np.linalg.cholesky(P_safe)
+        except np.linalg.LinAlgError:
+            print("Numerical instability in UKF: P matrix not positive definite. Resetting covariance.")
+            self.P = np.eye(self.L) * 0.1
+            L_matrix = np.linalg.cholesky(self.P)
+            
+        for i in range(self.L):
+            offset = self.gamma * L_matrix[:, i]
+            sigma_points[i + 1] = self.x + offset
+            sigma_points[i + 1 + self.L] = self.x - offset
+            
+        return sigma_points
+        
+    def predict(self, dt, accel_raw):
+        # 1. Generate Sigma Points
+        self.sigmas = self._generate_sigma_points()
+        
+        # 2. Propagate Sigma Points through Non-linear Kinematics
+        self.sigmas_pred = np.zeros_like(self.sigmas)
+        
+        for i, X in enumerate(self.sigmas):
+            y, z, vy, vz, phi_imu, theta_imu, psi_imu, phi_cam, theta_cam, psi_cam = X
+            
+            # Predict IMU rotation
+            r_imu = R.from_euler('ZYX', [psi_imu, theta_imu, phi_imu], degrees=False).as_matrix()
+            a_global = r_imu.dot(accel_raw) - np.array([0, 0, -9.81])
+            
+            # Physics equations (1D tracking along Y/Z plane)
+            y_new = y + vy * dt + 0.5 * a_global[1] * dt**2
+            z_new = z + vz * dt + 0.5 * a_global[2] * dt**2
+            vy_new = vy + a_global[1] * dt
+            vz_new = vz + a_global[2] * dt
+            
+            # Angles remain constant (static extrinsic tracking)
+            self.sigmas_pred[i] = [y_new, z_new, vy_new, vz_new, phi_imu, theta_imu, psi_imu, phi_cam, theta_cam, psi_cam]
+            
+        # 3. Compute Predicted State Mean and Covariance
+        self.x = np.sum(self.Wm[:, np.newaxis] * self.sigmas_pred, axis=0)
+        
+        self.P = self.Q.copy()
+        for i in range(2 * self.L + 1):
+            diff = self.sigmas_pred[i] - self.x
+            self.P += self.Wc[i] * np.outer(diff, diff)
+            
+    def _ukf_update(self, z_meas, R_meas, h_func):
+        # 1. Regenerate sigma points around the newly predicted state
+        # This handles sequential zero-time (dt=0) updates from multiple asynchronous sensors
+        # hitting the same timestamp seamlessly.
+        sigmas = self._generate_sigma_points()
+            
+        Z_pred = np.array([h_func(X) for X in sigmas])
+        
+        # 2. Predicted Measurement Mean
+        z_mean = np.sum(self.Wm[:, np.newaxis] * Z_pred, axis=0)
+        
+        # 3. Measurement Covariance (P_yy) and State-Measurement Cross-Covariance (P_xy)
+        dim_z = len(z_meas)
+        P_yy = R_meas.copy()
+        P_xy = np.zeros((self.L, dim_z))
+        
+        for i in range(2 * self.L + 1):
+            y_diff = Z_pred[i] - z_mean
+            x_diff = sigmas[i] - self.x
+            
+            P_yy += self.Wc[i] * np.outer(y_diff, y_diff)
+            P_xy += self.Wc[i] * np.outer(x_diff, y_diff)
+            
+        # 4. Kalman Gain
+        try:
+            K = P_xy @ np.linalg.inv(P_yy)
+        except np.linalg.LinAlgError:
+            print("Numerical instability in UKF: Measurement Covariance not invertible.")
+            return
+
+        # 5. State and Covariance Update
+        self.x = self.x + K @ (z_meas - z_mean)
+        self.P = self.P - K @ P_yy @ K.T
+
+    def update_pressure(self, press_z_array):
+        # h(X) extracts Z from the state, considering lever arm for two parallel pressure sensors
+        def h_pressure(X):
+            z = X[1]
+            z_offset = z - self.r_pressure_to_cg[2]
+            return np.array([z_offset, z_offset])
+            
+        self._ukf_update(np.array(press_z_array), self.R_pressure, h_pressure)
+        
+    def update_camera(self, cam_pos):
+        # We model the ArUco camera data using full 3D rotation and lever arm
+        def h_camera(X):
+            y, z = X[0], X[1]
+            phi_cam, theta_cam, psi_cam = X[7], X[8], X[9]
+            
+            r_cam = R.from_euler('ZYX', [psi_cam, theta_cam, phi_cam], degrees=False).as_matrix()
+            # Predicted ArUco measurement in Camera Frame
+            p_cam_frame = r_cam.dot(np.array([0, y, z])) + self.r_cam_to_cg
+            return p_cam_frame
+            
+        self._ukf_update(cam_pos, self.R_cam, h_camera)
+
+    def update_accelerometer(self, accel_raw):
+        # Instant IMU Observability
+        # Because we're predicting the pure stationary gravity vector (-9.81),
+        # any actual dynamic physical acceleration will temporarily act as "noise".
+        # A higher self.R_accel helps average this securely, bringing alignment slowly to true upright.
+        def h_accel(X):
+            phi_imu, theta_imu, psi_imu = X[4], X[5], X[6]
+            r_imu_inv = R.from_euler('ZYX', [psi_imu, theta_imu, phi_imu], degrees=False).as_matrix().T
+            global_gravity = np.array([0.0, 0.0, -9.81])
+            expected_local_accel = r_imu_inv.dot(global_gravity)
+            return expected_local_accel
+            
+        self._ukf_update(accel_raw, self.R_accel, h_accel)
+
