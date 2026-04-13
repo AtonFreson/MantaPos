@@ -108,10 +108,10 @@ def run_kalman_filter(filepath, target_runs=None):
             camera_pos = data_val.get('position')
             if camera_pos is not None:
                 ukf.update_camera(np.array(camera_pos))
-                # MantaPos outputs X, Y, Z. Force X=1.5406 for 2d-on-3d alignment
+                # MantaPos outputs X, Y, Z. Force X=-1.5406 for 2d-on-3d alignment
                 if current_time not in camera_points_by_time:
                     camera_points_by_time[current_time] = []
-                camera_points_by_time[current_time].append([1.5406, camera_pos[1], camera_pos[2]])
+                camera_points_by_time[current_time].append([-1.5406, camera_pos[1], camera_pos[2]])
         
         elif data_type == 'ref_pos_z1':
             latest_ref_z1 = data_val
@@ -119,18 +119,49 @@ def run_kalman_filter(filepath, target_runs=None):
             latest_ref_z2 = data_val
         elif data_type == 'ref_pos_track':
             if latest_ref_z1 is not None and latest_ref_z2 is not None:
-                ref_pos, ref_rot = global_reference_pos(latest_ref_z1, latest_ref_z2, data_val, invert_z=False)
-                if ref_pos is not None:
-                    ref_data.append({
-                        'timestamp': current_time,
-                        'position': ref_pos.tolist()
-                    })
+                # Custom interpolation for reference position based on track distance and depths
+                track_width = 3.1305 # Horizontal distance between the two rigid rail rails
+                frame_y_pos_offset = 0.196 # Minimum frame offset from the main depth sensor to the camera.
+                
+                # Use the latest depth readings to determine the Z position of the track, and interpolate Y based on the encoder distance along the track.
+                z0 = latest_ref_z1
+                z1 = latest_ref_z2
+                
+                # Constants for the frame pool setup, in meters.
+                adj = track_width # Horizontal distance between the depth sensors.
+                #frame_z_pos_offset = 0.069 # Vertical frame offset from the main depth sensor to the camera.
+
+                camera_x_offset = -1.5406 # Offset of the camera from the center of the pool in the x-direction.
+                camera_y_offset = 1.3757 # Maximum zeroing offset of the camera from the center of the pool in the y-direction.
+                camera_z_offset = -0.1186 + 0.225 - 0.187 # Offset of the camera at the zeroing position at the top of the pool in the z-direction.
+                
+                frame_pos = data_val + frame_y_pos_offset
+                # Determine y position based on the frame position, where frame_pose makes up the hypotenuse of a right triangle.
+                opp = z0 - z1
+                hyp = np.sqrt((opp**2) + (adj**2))
+
+                x = camera_x_offset
+                y = -frame_pos/hyp * adj + camera_y_offset
+                z = z0 - opp * frame_pos/hyp + camera_z_offset
+
+                # Camera rotation around y-axis based on right triangle. Assume the camera is level otherwise.
+                camera_rot_x = np.arctan(opp/adj)
+
+                ref_pos = np.array([x, y, z])
+                ref_rot = np.array([camera_rot_x, 0, 0])
+                
+
+                ref_data.append({
+                    'timestamp': current_time,
+                    'position': ref_pos.tolist(),
+                    'rotation': ref_rot.tolist()
+                })
 
         # Record actual estimated position from the Kalman Filter
         if dt > 0:
             ukf_data.append({
                 'timestamp': current_time,
-                'position': [1.5406, ukf.x[0], ukf.x[1]]
+                'position': [-1.5406, ukf.x[0], ukf.x[1]]
             })
             
         last_time = current_time
@@ -152,12 +183,12 @@ def run_kalman_filter(filepath, target_runs=None):
 if __name__ == "__main__":
     filepath = os.path.join(os.path.dirname(__file__), 'MantaPos_data.json')
     target_runs = [
-        'ChArUco Single 2m run1',
-        'ChArUco Single 2m run2',
-        'ChArUco Single 2m run3'
+        'ChArUco Quad 4.5m run2',
+        'ChArUco Quad 4.5m run3'
     ]
     ukf_data, ref_data, camera_data = run_kalman_filter(filepath, target_runs)
     
     print("Visualizing results...")
-    visualize_ukf_results(ukf_data, ref_data, camera_data)
+    # Optional parameter: use_2d=True to ignore X-axis when there is no variability
+    visualize_ukf_results(ukf_data, ref_data, camera_data, use_2d=True)
 

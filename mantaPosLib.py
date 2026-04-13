@@ -1300,14 +1300,13 @@ def zero_marker_position(tvec, rvec, camera_position, camera_rotation):
     return marker_global.flatten(), marker_euler
 
 # Function to provide the global reference coordinate position of the camera system based on the depth and frame_pos encoder values.
-def global_reference_pos(z0, z1, frame_pos, invert_z=True):
+def global_reference_pos(z0, z1, frame_pos):
     if None in (z0, z1, frame_pos):
         return None, None
     
-    if invert_z:
-        # Invert z0 and z1, since input is from the depth sensors
-        z0 = -z0
-        z1 = -z1
+    # Invert z0 and z1, since input is from the depth sensors
+    z0 = -z0
+    z1 = -z1
 
     # Constants for the frame pool setup, in meters.
     adj = 3.1305 # Horizontal distance between the depth sensors.
@@ -1568,17 +1567,17 @@ class PositionSharedMemory:
         self.close()
 
 class MantaUKF:
-    """ Asynchronous Unscented Kalman Filter structured from KalmanSetup.txt. """
+    """ Asynchronous Unscented Kalman Filter, fuses IMU, ArUco & Pressure data. """
     def __init__(self):
         self.L = 10
         # 10 States: [y, z, v_y, v_z, phi_imu, theta_imu, psi_imu, phi_cam, theta_cam, psi_cam]
         self.x = np.zeros(self.L)
         self.P = np.eye(self.L) * 0.1 # Covariance matrix
         
-        # Extrinsic Lever Arm Offsets: Manual configuration based on physical hardware distances
-        self.r_imu_to_cg = np.array([0.0, 0.0, 0.0]) # Distance from CG to IMU
-        self.r_cam_to_cg = np.array([0.0, 1.3895, 0.0]) # Found camera_pos_offset in settings
-        self.r_pressure_to_cg = np.array([0.0, 0.0, 0.0]) 
+        # Extrinsic Lever Arm Offsets: Manual configuration based on physical hardware distances. CG placed on bottom face of box, close to backplate.
+        self.r_imu_to_cg = np.array([-0.07, -0.07, -0.07]) # Distance from IMU to CG
+        self.r_cam_to_cg = np.array([-0.07, 0.0, -0.15]) # Distance from Camera to CG
+        self.r_pressure_to_cg = np.array([-0.07, 0.07, 0.0]) # Distance from pressure sensors to CG
 
         # Process Noise Q and Measurement Noise Matrices R
         self.Q = np.eye(self.L) * 0.001

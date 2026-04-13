@@ -11,12 +11,20 @@ from visualise_mantaPos import (
     FRAME_INTERVAL_MS
 )
 
-def visualize_ukf_results(ukf_data, ref_data, camera_data):
-    """Create an animated 3D visualization of UKF vs Reference position data."""
+def visualize_ukf_results(ukf_data, ref_data, camera_data, use_2d=False):
+    """Create an animated visualization of UKF vs Reference position data."""
+    import numpy as np
     # Extract position arrays with timestamps
     ukf_x, ukf_y, ukf_z, ukf_ts = extract_position_arrays_with_timestamps(ukf_data)
     ref_x, ref_y, ref_z, ref_ts = extract_position_arrays_with_timestamps(ref_data)
     cam_x, cam_y, cam_z, cam_ts = extract_position_arrays_with_timestamps(camera_data)
+    
+    all_x = ukf_x + ref_x + cam_x
+    if use_2d and all_x:
+        x_min, x_max = min(all_x), max(all_x)
+        if x_max - x_min > 1e-3:
+            print(f"WARNING: 2D view selected, but X-axis has variability! Min: {x_min:.4f}, Max: {x_max:.4f}")
+    
     
     # Get global time range from all data sources
     all_timestamps = []
@@ -37,26 +45,42 @@ def visualize_ukf_results(ukf_data, ref_data, camera_data):
     n_frames = max(int(duration_ms / real_time_per_frame), 1)
     
     fig = plt.figure(figsize=(14, 10))
-    ax = fig.add_subplot(111, projection='3d')
+    if use_2d:
+        ax = fig.add_subplot(111)
+    else:
+        ax = fig.add_subplot(111, projection='3d')
     fig.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.15)
     
     # Static trails (faded)
-    if ukf_x: ax.plot(ukf_x, ukf_y, ukf_z, c='purple', alpha=0.3, linewidth=2)
-    if ref_x: ax.plot(ref_x, ref_y, ref_z, c='red', alpha=0.3, linewidth=1)
-    if cam_x: ax.plot(cam_x, cam_y, cam_z, c='blue', alpha=0.15, linewidth=1)
+    if use_2d:
+        if ukf_x: ax.plot(ukf_y, ukf_z, c='purple', alpha=0.3, linewidth=2)
+        if ref_x: ax.plot(ref_y, ref_z, c='red', alpha=0.3, linewidth=1)
+        if cam_x: ax.plot(cam_y, cam_z, c='blue', alpha=0.15, linewidth=1)
+    else:
+        if ukf_x: ax.plot(ukf_x, ukf_y, ukf_z, c='purple', alpha=0.3, linewidth=2)
+        if ref_x: ax.plot(ref_x, ref_y, ref_z, c='red', alpha=0.3, linewidth=1)
+        if cam_x: ax.plot(cam_x, cam_y, cam_z, c='blue', alpha=0.15, linewidth=1)
 
     # Animated scatter points
-    ukf_point = ax.scatter([], [], [], c='purple', marker='*', s=200, label='UKF Estimation', zorder=6)
-    ref_point = ax.scatter([], [], [], c='red', marker='^', s=100, label='Reference POS', zorder=5)
-    cam_point = ax.scatter([], [], [], c='blue', marker='s', s=80, label='Avg Camera', zorder=5)
+    if use_2d:
+        ukf_point = ax.scatter([], [], c='purple', marker='*', s=200, label='UKF Estimation', zorder=6)
+        ref_point = ax.scatter([], [], c='red', marker='^', s=100, label='Reference POS', zorder=5)
+        cam_point = ax.scatter([], [], c='blue', marker='s', s=80, label='Avg Camera', zorder=5)
+        trail_line, = ax.plot([], [], c='purple', linewidth=2, alpha=0.8, zorder=4)
+        ax.set_xlabel('Y')
+        ax.set_ylabel('Z')
+        title = ax.set_title('UKF vs Reference 2D Visualization - t=0ms')
+    else:
+        ukf_point = ax.scatter([], [], [], c='purple', marker='*', s=200, label='UKF Estimation', zorder=6)
+        ref_point = ax.scatter([], [], [], c='red', marker='^', s=100, label='Reference POS', zorder=5)
+        cam_point = ax.scatter([], [], [], c='blue', marker='s', s=80, label='Avg Camera', zorder=5)
+        trail_line, = ax.plot([], [], [], c='purple', linewidth=2, alpha=0.8, zorder=4)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        title = ax.set_title('UKF vs Reference 3D Visualization - t=0ms')
     
-    trail_line, = ax.plot([], [], [], c='purple', linewidth=2, alpha=0.8, zorder=4)
     trail_duration_ms = 3000
-    
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    title = ax.set_title('UKF vs Reference 3D Visualization - t=0ms')
     
     # Calculate axis limits
     all_x = ukf_x + ref_x + cam_x
@@ -65,9 +89,14 @@ def visualize_ukf_results(ukf_data, ref_data, camera_data):
     
     if all_x:
         margin = 0.5
-        ax.set_xlim([min(all_x) - margin, max(all_x) + margin])
-        ax.set_ylim([min(all_y) - margin, max(all_y) + margin])
-        ax.set_zlim([min(all_z) - margin, max(all_z) + margin])
+        if use_2d:
+            ax.set_xlim([min(all_y) - margin, max(all_y) + margin])
+            ax.set_ylim([min(all_z) - margin, max(all_z) + margin])
+            ax.set_aspect('equal', adjustable='datalim')
+        else:
+            ax.set_xlim([min(all_x) - margin, max(all_x) + margin])
+            ax.set_ylim([min(all_y) - margin, max(all_y) + margin])
+            ax.set_zlim([min(all_z) - margin, max(all_z) + margin])
     
     ax.legend(loc='upper left')
     
@@ -80,23 +109,38 @@ def visualize_ukf_results(ukf_data, ref_data, camera_data):
         
         # update ukf
         ux, uy, uz = find_position_at_time(ukf_x, ukf_y, ukf_z, ukf_ts, current_time)
-        if ux is not None: ukf_point._offsets3d = ([ux], [uy], [uz])
-        else: ukf_point._offsets3d = ([], [], [])
+        if use_2d:
+            if ux is not None: ukf_point.set_offsets(np.c_[[uy], [uz]])
+            else: ukf_point.set_offsets(np.empty((0, 2)))
+        else:
+            if ux is not None: ukf_point._offsets3d = ([ux], [uy], [uz])
+            else: ukf_point._offsets3d = ([], [], [])
             
         # update ref
         rx, ry, rz = find_position_at_time(ref_x, ref_y, ref_z, ref_ts, current_time)
-        if rx is not None: ref_point._offsets3d = ([rx], [ry], [rz])
-        else: ref_point._offsets3d = ([], [], [])
+        if use_2d:
+            if rx is not None: ref_point.set_offsets(np.c_[[ry], [rz]])
+            else: ref_point.set_offsets(np.empty((0, 2)))
+        else:
+            if rx is not None: ref_point._offsets3d = ([rx], [ry], [rz])
+            else: ref_point._offsets3d = ([], [], [])
             
         # update cameras
         cx_val, cy_val, cz_val = find_position_at_time(cam_x, cam_y, cam_z, cam_ts, current_time)
-        if cx_val is not None: cam_point._offsets3d = ([cx_val], [cy_val], [cz_val])
-        else: cam_point._offsets3d = ([], [], [])
+        if use_2d:
+            if cx_val is not None: cam_point.set_offsets(np.c_[[cy_val], [cz_val]])
+            else: cam_point.set_offsets(np.empty((0, 2)))
+        else:
+            if cx_val is not None: cam_point._offsets3d = ([cx_val], [cy_val], [cz_val])
+            else: cam_point._offsets3d = ([], [], [])
                 
         # ukf trail
         trail_x, trail_y, trail_z = find_trail_at_time(ukf_x, ukf_y, ukf_z, ukf_ts, current_time, trail_duration_ms)
-        trail_line.set_data(trail_x, trail_y)
-        trail_line.set_3d_properties(trail_z)
+        if use_2d:
+            trail_line.set_data(trail_y, trail_z)
+        else:
+            trail_line.set_data(trail_x, trail_y)
+            trail_line.set_3d_properties(trail_z)
         
         elapsed = current_time - min_time
         title.set_text(f"UKF vs Reference - t={elapsed:.0f}ms / {duration_ms:.0f}ms ({PLAYBACK_SPEED}x)")
@@ -139,13 +183,16 @@ def visualize_ukf_results(ukf_data, ref_data, camera_data):
     ax_home = plt.axes([0.87, 0.08, 0.1, 0.04])
     button_home = Button(ax_home, 'Reset View')
     def reset_view(event):
-        ax.view_init(elev=35, azim=-20)
+        if not use_2d:
+            ax.view_init(elev=35, azim=-20)
         fig.canvas.draw_idle()
     button_home.on_clicked(reset_view)
     
     plt.figtext(0.05, 0.08, f'Speed: {PLAYBACK_SPEED}x', fontsize=10, bbox={"facecolor": "lightgray", "alpha": 0.5, "pad": 3})
-    ax.view_init(elev=35, azim=-20)
-    set_axes_equal(ax)
+    
+    if not use_2d:
+        ax.view_init(elev=35, azim=-20)
+        set_axes_equal(ax)
     
     def on_key(event):
         if event.key == ' ': toggle_play(None)
