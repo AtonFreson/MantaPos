@@ -8,6 +8,7 @@ from matplotlib.animation import FuncAnimation
 from scipy.spatial.transform import Rotation as R
 
 from mantaPosLib import MantaUKF, global_reference_pos
+#from mantaPosLib_old import MantaUKF, global_reference_pos
 from visualise_ukf import visualize_ukf_results
 
 def load_data_stream(filepath, target_runs=None):
@@ -63,7 +64,20 @@ def run_kalman_filter(filepath, target_runs=None):
     print(f"Loaded {len(data_stream)} datapoints.")
     
     # Initialize the UKF
-    ukf = MantaUKF()
+    fuse_camera_coupling = 'yz'  # Options: None/'none', 'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz'
+    # "Coupled" means the selected camera axes are fused through h_camera_xyz,
+    # the nonlinear camera model that depends on both position and camera angles.
+    # A residual on a coupled axis can therefore adjust Y/Z and camera-angle states together.
+    # "Uncoupled" means direct measurement updates (h_camera_y / h_camera_z),
+    # where Y/Z are corrected without using the rotation coupling model.
+    # Any non-coupled Y/Z axis is still fused directly (uncoupled) into the state.
+    # X has no direct state path, so uncoupled X is ignored.
+    # Examples:
+    #   - 'yz': couple Y and Z; X ignored.
+    #   - None/'none': no coupled axes; Y/Z still fused directly.
+    #   - 'xyz': couple all three camera axes.
+    ukf = MantaUKF(fuse_camera_coupling=fuse_camera_coupling)
+    #ukf = MantaUKF()
     
     last_time = None
     last_accel_vec = np.array([0.0, 0.0, -9.81])
@@ -183,8 +197,8 @@ def run_kalman_filter(filepath, target_runs=None):
 if __name__ == "__main__":
     filepath = os.path.join(os.path.dirname(__file__), 'MantaPos_data.json')
     target_runs = [
-        'ChArUco Quad 4.5m run2',
-        'ChArUco Quad 4.5m run3'
+        'ArUco Quad 4.5m run3',
+        'ArUco Quad 4.5-7m'
     ]
     ukf_data, ref_data, camera_data = run_kalman_filter(filepath, target_runs)
     

@@ -1568,16 +1568,16 @@ class PositionSharedMemory:
 
 class MantaUKF:
     """ Asynchronous Unscented Kalman Filter, fuses IMU, ArUco & Pressure data. """
-    def __init__(self):
+    def __init__(self, fuse_camera_coupling='yz'):
         self.L = 10
         # 10 States: [y, z, v_y, v_z, phi_imu, theta_imu, psi_imu, phi_cam, theta_cam, psi_cam]
         self.x = np.zeros(self.L)
         self.P = np.eye(self.L) * 0.1 # Covariance matrix
         
         # Extrinsic Lever Arm Offsets: Manual configuration based on physical hardware distances. CG placed on bottom face of box, close to backplate.
-        self.r_imu_to_cg = np.array([-0.07, -0.07, -0.07]) # Distance from IMU to CG
-        self.r_cam_to_cg = np.array([-0.07, 0.0, -0.15]) # Distance from Camera to CG
-        self.r_pressure_to_cg = np.array([-0.07, 0.07, 0.0]) # Distance from pressure sensors to CG
+        self.r_imu_to_cg = np.array([-0.05, -0.05, -0.035]) # Distance from IMU to CG
+        self.r_cam_to_cg = np.array([-0.05, 0.0, -0.07]) # Distance from Camera to CG
+        self.r_pressure_to_cg = np.array([-0.05, 0.05, 0.0]) # Distance from pressure sensors to CG
 
         # Process Noise Q and Measurement Noise Matrices R
         self.Q = np.eye(self.L) * 0.001
@@ -1585,10 +1585,19 @@ class MantaUKF:
         for i in range(4, 10):
             self.Q[i, i] = 1e-4
             
-        self.R_cam = np.diag([0.01, 0.01, 0.01]) # X, Y, Z (Aruco X drift +-3cm)
-        self.R_pressure = np.diag([0.005, 0.005]) # Global Z Anchor (two sensors)
-        # Measurement noise for stationary accelerometer assumption
+        # Camera position measurement covariance for coupled updates (X, Y, Z). X error confirmed to ~+-3cm
+        self.R_cam = np.diag([0.01, 0.01, 0.01])
+        # Pressure sensor measurement covariance.
+        self.R_pressure = np.diag([0.005, 0.005]) # Generally the Z Anchor (dual due to two sensors)
+        # Measurement noise for stationary accelerometer assumption.
         self.R_accel = np.diag([0.5, 0.5, 0.5]) 
+
+        # Direct (uncoupled) Y/Z updates reuse the same diagonal terms for consistency.
+        self.R_cam_yz = self.R_cam[np.ix_([1, 2], [1, 2])]
+        self.R_cam_y = self.R_cam[np.ix_([1], [1])]
+        self.R_cam_z = self.R_cam[np.ix_([2], [2])]
+
+        self.fuse_camera_coupling = fuse_camera_coupling
         
         # UKF Parameters (Tuned for positive weights to guarantee P matrix stability)
         self.alpha = 1.0  
@@ -1700,17 +1709,58 @@ class MantaUKF:
         self._ukf_update(np.array(press_z_array), self.R_pressure, h_pressure)
         
     def update_camera(self, cam_pos):
-        # We model the ArUco camera data using full 3D rotation and lever arm
-        def h_camera(X):
+        # Camera fusion behavior is controlled by self.fuse_camera_coupling.
+        cam_pos = np.asarray(cam_pos, dtype=float)
+        if cam_pos.shape[0] < 3 or not np.all(np.isfinite(cam_pos[:3])):
+            return
+
+        mode = self.fuse_camera_coupling
+        if mode is None or mode == 'none':
+            coupled_axes = set()
+        elif isinstance(mode, str) and all(a in 'xyz' for a in mode.lower()):
+            coupled_axes = {a for a in mode.lower()}
+        else:
+            raise ValueError(
+                f"Invalid fuse_camera_coupling '{self.fuse_camera_coupling}'. "
+                "Expected one of: 'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz', None, 'none'."
+            )
+        axis_to_idx = {'x': 0, 'y': 1, 'z': 2}
+
+        def h_camera_xyz(X):
             y, z = X[0], X[1]
             phi_cam, theta_cam, psi_cam = X[7], X[8], X[9]
-            
             r_cam = R.from_euler('ZYX', [psi_cam, theta_cam, phi_cam], degrees=False).as_matrix()
-            # Predicted ArUco measurement in Camera Frame
-            p_cam_frame = r_cam.dot(np.array([0, y, z])) + self.r_cam_to_cg
+            p_cam_frame = r_cam.dot(np.array([0.0, y, z])) + self.r_cam_to_cg
             return p_cam_frame
-            
-        self._ukf_update(cam_pos, self.R_cam, h_camera)
+
+        def h_camera_selected(X, indices):
+            return h_camera_xyz(X)[indices]
+
+        def h_camera_y(X):
+            return np.array([X[0]])
+
+        def h_camera_z(X):
+            return np.array([X[1]])
+
+        def h_camera_yz(X):
+            return np.array([X[0], X[1]])
+
+        # 1) Apply coupled updates for exactly the requested coupled axes.
+        if coupled_axes:
+            coupled_order = [a for a in ('x', 'y', 'z') if a in coupled_axes]
+            coupled_indices = [axis_to_idx[a] for a in coupled_order]
+            z_coupled = cam_pos[coupled_indices]
+            R_coupled = self.R_cam[np.ix_(coupled_indices, coupled_indices)]
+            self._ukf_update(z_coupled, R_coupled, lambda X: h_camera_selected(X, coupled_indices))
+
+        # 2) Apply uncoupled direct updates for axes not requested as coupled.
+        # X is skipped when uncoupled because X is not represented as a direct state variable.
+        if 'y' not in coupled_axes and 'z' not in coupled_axes:
+            self._ukf_update(cam_pos[1:3], self.R_cam_yz, h_camera_yz)
+        elif 'y' not in coupled_axes:
+            self._ukf_update(np.array([cam_pos[1]]), self.R_cam_y, h_camera_y)
+        elif 'z' not in coupled_axes:
+            self._ukf_update(np.array([cam_pos[2]]), self.R_cam_z, h_camera_z)
 
     def update_accelerometer(self, accel_raw):
         # Instant IMU Observability
