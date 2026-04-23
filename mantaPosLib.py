@@ -1773,6 +1773,10 @@ class MantaUKF:
             global_gravity = np.array([0.0, 0.0, -9.81])
             expected_local_accel = r_imu_inv.dot(global_gravity)
             return expected_local_accel
+        
+        def h_accel_direct(X):
+            return np.array([X[0], X[1], X[2]])
             
         self._ukf_update(accel_raw, self.R_accel, h_accel)
+        #self._ukf_update(accel_raw, self.R_accel, h_accel_direct)
 

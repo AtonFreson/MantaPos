@@ -87,6 +87,7 @@ def process_file(filepath):
                         for i in range(0, 4):
                             cam_key = f"camera_pos_{i}"
                             if cam_key in data:
+                                # X seems to be flipped in the camera data, can possibly flip it back.
                                 records.append((ts, cam_key, data[cam_key]))
                                 
     records.sort(key=lambda x: x[0])

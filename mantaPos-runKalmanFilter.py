@@ -64,7 +64,7 @@ def run_kalman_filter(filepath, target_runs=None):
     print(f"Loaded {len(data_stream)} datapoints.")
     
     # Initialize the UKF
-    fuse_camera_coupling = 'yz'  # Options: None/'none', 'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz'
+    fuse_camera_coupling = 'none'  # Options: None/'none', 'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz'
     # "Coupled" means the selected camera axes are fused through h_camera_xyz,
     # the nonlinear camera model that depends on both position and camera angles.
     # A residual on a coupled axis can therefore adjust Y/Z and camera-angle states together.
@@ -109,6 +109,7 @@ def run_kalman_filter(filepath, target_runs=None):
         if data_type == 'imu':
             accel_data = data_val.get('acceleration', {})
             accel_vec = np.array([accel_data.get('x', 0), accel_data.get('y', 0), accel_data.get('z', -9.81)])
+            #accel_vec = np.array([accel_data.get('y', 0), accel_data.get('z', 0), accel_data.get('x', -9.81)])
             last_accel_vec = accel_vec  # Update last known acceleration
             ukf.update_accelerometer(accel_vec)
             
@@ -146,16 +147,18 @@ def run_kalman_filter(filepath, target_runs=None):
                 #frame_z_pos_offset = 0.069 # Vertical frame offset from the main depth sensor to the camera.
 
                 camera_x_offset = -1.5406 # Offset of the camera from the center of the pool in the x-direction.
-                camera_y_offset = 1.3757 # Maximum zeroing offset of the camera from the center of the pool in the y-direction.
+                #camera_y_offset = 1.3757 # Maximum zeroing offset of the camera from the center of the pool in the y-direction.
+                camera_y_offset = 1.4477259577554185 # Zeroed from initial camera data from ChArUco Quad 7m run1.
                 camera_z_offset = -0.1186 + 0.225 - 0.187 # Offset of the camera at the zeroing position at the top of the pool in the z-direction.
                 
-                frame_pos = data_val + frame_y_pos_offset
                 # Determine y position based on the frame position, where frame_pose makes up the hypotenuse of a right triangle.
                 opp = z0 - z1
                 hyp = np.sqrt((opp**2) + (adj**2))
 
                 x = camera_x_offset
-                y = -frame_pos/hyp * adj + camera_y_offset
+                y = -data_val/hyp * adj + camera_y_offset
+                
+                frame_pos = data_val + frame_y_pos_offset
                 z = z0 - opp * frame_pos/hyp + camera_z_offset
 
                 # Camera rotation around y-axis based on right triangle. Assume the camera is level otherwise.
@@ -199,6 +202,7 @@ if __name__ == "__main__":
     target_runs = [
         'ArUco Quad 4.5m run3',
         'ArUco Quad 4.5-7m'
+        #'ArUco Single 7-4.5m'
     ]
     ukf_data, ref_data, camera_data = run_kalman_filter(filepath, target_runs)
     
