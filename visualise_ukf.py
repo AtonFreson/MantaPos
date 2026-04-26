@@ -11,6 +11,67 @@ from visualise_mantaPos import (
     FRAME_INTERVAL_MS
 )
 
+def plot_differences(ukf_data, ref_data, camera_data=None):
+    import numpy as np
+    if not ukf_data or not ref_data:
+        print("Missing data for difference plot")
+        return
+        
+    ukf_ts = np.array([d['timestamp'] for d in ukf_data])
+    ukf_y = np.array([d['position'][1] for d in ukf_data])
+    ukf_z = np.array([d['position'][2] for d in ukf_data])
+    
+    ref_ts = np.array([d['timestamp'] for d in ref_data])
+    ref_y = np.array([d['position'][1] for d in ref_data])
+    ref_z = np.array([d['position'][2] for d in ref_data])
+    
+    # Interpolate reference data precisely at UKF timestamps
+    ref_y_interp = np.interp(ukf_ts, ref_ts, ref_y)
+    ref_z_interp = np.interp(ukf_ts, ref_ts, ref_z)
+    
+    diff_y = ukf_y - ref_y_interp
+    diff_z = ukf_z - ref_z_interp
+    
+    start_ts = ukf_ts[0]
+    
+    # Time in seconds from start
+    t_sec = (ukf_ts - start_ts) / 1000.0
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(10, 8))
+    fig.canvas.manager.set_window_title('UKF vs Reference Differences')
+    
+    ax1.plot(t_sec, diff_y, label='Y Difference (UKF - Ref)', color='green')
+    
+    if camera_data:
+        cam_ts = np.array([d['timestamp'] for d in camera_data])
+        cam_y = np.array([d['position'][1] for d in camera_data])
+        cam_z = np.array([d['position'][2] for d in camera_data])
+        
+        # Interpolate reference data at Camera timestamps
+        ref_cam_y_interp = np.interp(cam_ts, ref_ts, ref_y)
+        ref_cam_z_interp = np.interp(cam_ts, ref_ts, ref_z)
+        
+        diff_cam_y = cam_y - ref_cam_y_interp
+        diff_cam_z = cam_z - ref_cam_z_interp
+        
+        t_sec_cam = (cam_ts - start_ts) / 1000.0
+        
+        ax1.plot(t_sec_cam, diff_cam_y, label='Y Difference (Camera - Ref)', color='blue', alpha=0.5, linestyle='--')
+        ax2.plot(t_sec_cam, diff_cam_z, label='Z Difference (Camera - Ref)', color='blue', alpha=0.5, linestyle='--')
+
+    ax1.set_ylabel('Y Difference (m)')
+    ax1.legend()
+    ax1.grid(True)
+    
+    ax2.plot(t_sec, diff_z, label='Z Difference (UKF - Ref)', color='orange')
+    ax2.set_xlabel('Time (s)')
+    ax2.set_ylabel('Z Difference (m)')
+    ax2.legend()
+    ax2.grid(True)
+    
+    plt.tight_layout()
+
+
 def visualize_ukf_results(ukf_data, ref_data, camera_data, use_2d=False):
     """Create an animated visualization of UKF vs Reference position data."""
     import numpy as np

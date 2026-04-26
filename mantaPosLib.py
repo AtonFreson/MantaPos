@@ -1574,10 +1574,11 @@ class MantaUKF:
         self.x = np.zeros(self.L)
         self.P = np.eye(self.L) * 0.1 # Covariance matrix
         
-        # Extrinsic Lever Arm Offsets: Manual configuration based on physical hardware distances. CG placed on bottom face of box, close to backplate.
-        self.r_imu_to_cg = np.array([-0.05, -0.05, -0.035]) # Distance from IMU to CG
-        self.r_cam_to_cg = np.array([-0.05, 0.0, -0.07]) # Distance from Camera to CG
-        self.r_pressure_to_cg = np.array([-0.05, 0.05, 0.0]) # Distance from pressure sensors to CG
+        # Extrinsic Lever Arm Offsets: Manual configuration based on physical hardware distances. CG placed on bottom face of box, close to backplate. 
+        ##### Unused #####
+        #self.r_imu_to_cg = np.array([-0.05, -0.05, -0.035]) # Distance from IMU to CG
+        #self.r_cam_to_cg = np.array([-0.05, 0.0, -0.07]) # Distance from Camera to CG
+        #self.r_pressure_to_cg = np.array([-0.05, 0.05, 0.0]) # Distance from pressure sensors to CG
 
         # Process Noise Q and Measurement Noise Matrices R
         self.Q = np.eye(self.L) * 0.001
@@ -1586,11 +1587,11 @@ class MantaUKF:
             self.Q[i, i] = 1e-4
             
         # Camera position measurement covariance for coupled updates (X, Y, Z). X error confirmed to ~+-3cm
-        self.R_cam = np.diag([0.01, 0.01, 0.01])
+        self.R_cam = np.diag(np.ones(3) * 0.01)
         # Pressure sensor measurement covariance.
-        self.R_pressure = np.diag([0.005, 0.005]) # Generally the Z Anchor (dual due to two sensors)
+        self.R_pressure = np.diag(np.ones(2) * 0.005) # Generally the Z Anchor (dual due to two sensors)
         # Measurement noise for stationary accelerometer assumption.
-        self.R_accel = np.diag([0.5, 0.5, 0.5]) 
+        self.R_accel = np.diag(np.ones(3) * 0.5)
 
         # Direct (uncoupled) Y/Z updates reuse the same diagonal terms for consistency.
         self.R_cam_yz = self.R_cam[np.ix_([1, 2], [1, 2])]
@@ -1703,7 +1704,7 @@ class MantaUKF:
         # h(X) extracts Z from the state, considering lever arm for two parallel pressure sensors
         def h_pressure(X):
             z = X[1]
-            z_offset = z - self.r_pressure_to_cg[2]
+            z_offset = z # - self.r_pressure_to_cg[2]
             return np.array([z_offset, z_offset])
             
         self._ukf_update(np.array(press_z_array), self.R_pressure, h_pressure)
@@ -1730,7 +1731,7 @@ class MantaUKF:
             y, z = X[0], X[1]
             phi_cam, theta_cam, psi_cam = X[7], X[8], X[9]
             r_cam = R.from_euler('ZYX', [psi_cam, theta_cam, phi_cam], degrees=False).as_matrix()
-            p_cam_frame = r_cam.dot(np.array([0.0, y, z])) + self.r_cam_to_cg
+            p_cam_frame = r_cam.dot(np.array([0.0, y, z])) # + self.r_cam_to_cg
             return p_cam_frame
 
         def h_camera_selected(X, indices):
