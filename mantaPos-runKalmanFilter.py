@@ -9,7 +9,7 @@ from scipy.spatial.transform import Rotation as R
 
 from mantaPosLib import MantaUKF, global_reference_pos
 #from mantaPosLib_old import MantaUKF, global_reference_pos
-from visualise_ukf import visualize_ukf_results, plot_differences
+from visualise_ukf import visualize_ukf_results, plot_differences, plot_angles
 
 def load_data_stream(filepath, target_runs=None):
     """
@@ -178,7 +178,8 @@ def run_kalman_filter(filepath, target_runs=None):
         if dt > 0:
             ukf_data.append({
                 'timestamp': current_time,
-                'position': [-1.5406, ukf.x[0], ukf.x[1]]
+                'position': [-1.5406, ukf.x[0], ukf.x[1]],
+                'angles': [ukf.x[4], ukf.x[5], ukf.x[6]]
             })
             
         last_time = current_time
@@ -207,6 +208,9 @@ if __name__ == "__main__":
     ukf_data, ref_data, camera_data = run_kalman_filter(filepath, target_runs)
     
     print("Visualizing results...")
+    plot_angles(ukf_data)
+    #plot_angles(ukf_data, show_graphs=False)
     plot_differences(ukf_data, ref_data, camera_data)
+
     # Optional parameter: use_2d=True to ignore X-axis when there is no variability
     visualize_ukf_results(ukf_data, ref_data, camera_data, use_2d=True)

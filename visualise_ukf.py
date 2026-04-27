@@ -42,6 +42,19 @@ def plot_differences(ukf_data, ref_data, camera_data=None):
     
     ax1.plot(t_sec, diff_y, label='Y Difference (UKF - Ref)', color='green')
     
+    # Calculate errors
+    diff_y_trunc, diff_z_trunc = diff_y, diff_z
+    if len(diff_y) > 400: # Exclude first and last 100 samples to avoid startup/shutdown transients
+        diff_y_trunc, diff_z_trunc = diff_y[100:-100], diff_z[100:-100]
+    ukf_mae_y = np.mean(np.abs(diff_y_trunc))
+    ukf_mae_z = np.mean(np.abs(diff_z_trunc))
+    ukf_rmse_y = np.sqrt(np.mean(np.square(diff_y_trunc)))
+    ukf_rmse_z = np.sqrt(np.mean(np.square(diff_z_trunc)))
+
+    print("\n-- Error Analysis (Relative to Reference) --")
+    print(f"UKF Error    - Y: MAE={ukf_mae_y:.4f}m, RMSE={ukf_rmse_y:.4f}m")
+    print(f"UKF Error    - Z: MAE={ukf_mae_z:.4f}m, RMSE={ukf_rmse_z:.4f}m")
+    
     if camera_data:
         cam_ts = np.array([d['timestamp'] for d in camera_data])
         cam_y = np.array([d['position'][1] for d in camera_data])
@@ -53,6 +66,15 @@ def plot_differences(ukf_data, ref_data, camera_data=None):
         
         diff_cam_y = cam_y - ref_cam_y_interp
         diff_cam_z = cam_z - ref_cam_z_interp
+        
+        cam_mae_y = np.mean(np.abs(diff_cam_y))
+        cam_mae_z = np.mean(np.abs(diff_cam_z))
+        cam_rmse_y = np.sqrt(np.mean(np.square(diff_cam_y)))
+        cam_rmse_z = np.sqrt(np.mean(np.square(diff_cam_z)))
+
+        print(f"Camera Error - Y: MAE={cam_mae_y:.4f}m, RMSE={cam_rmse_y:.4f}m")
+        print(f"Camera Error - Z: MAE={cam_mae_z:.4f}m, RMSE={cam_rmse_z:.4f}m")
+        print("--------------------------------------------")
         
         t_sec_cam = (cam_ts - start_ts) / 1000.0
         
@@ -71,6 +93,79 @@ def plot_differences(ukf_data, ref_data, camera_data=None):
     
     plt.tight_layout()
 
+def plot_angles(ukf_data, show_graphs=True):
+    """Plot the IMU angles estimated by the UKF"""
+    import numpy as np
+    from scipy.fft import fft, fftfreq
+    if not ukf_data or 'angles' not in ukf_data[0]:
+        print("Missing angle data for plot")
+        return
+        
+    ukf_ts = np.array([d['timestamp'] for d in ukf_data])
+    angles = np.array([d['angles'] for d in ukf_data])
+    
+    start_ts = ukf_ts[0]
+    t_sec = (ukf_ts - start_ts) / 1000.0
+    
+    # Angles are in radians, convert to degrees for easier reading
+    angles_deg = np.rad2deg(angles)
+    
+    phi = angles_deg[:, 0]
+    theta = angles_deg[:, 1]
+    psi = angles_deg[:, 2]
+
+    print("\n--- IMU Angles Analysis ---")
+    print(f"Phi (Roll)   - Min: {np.min(phi):.3f}°, Max: {np.max(phi):.3f}°, Avg: {np.mean(phi):.3f}°")
+    print(f"Theta (Pitch)- Min: {np.min(theta):.3f}°, Max: {np.max(theta):.3f}°, Avg: {np.mean(theta):.3f}°")
+    print(f"Psi (Yaw)    - Min: {np.min(psi):.3f}°, Max: {np.max(psi):.3f}°, Avg: {np.mean(psi):.3f}°")
+
+    # Basic FFT to find dominant frequencies (assumes roughly uniform sampling)
+    # Average dt
+    dt = np.mean(np.diff(t_sec))
+    N = len(t_sec)
+    
+    if dt > 0 and N > 1:
+        yf_phi = fft(phi - np.mean(phi))
+        yf_theta = fft(theta - np.mean(theta))
+        yf_psi = fft(psi - np.mean(psi))
+        
+        xf = fftfreq(N, dt)[:N//2]
+        
+        # Get dominant frequency (skip index 0 which is DC)
+        idx_phi = np.argmax(np.abs(yf_phi[1:N//2])) + 1
+        idx_theta = np.argmax(np.abs(yf_theta[1:N//2])) + 1
+        idx_psi = np.argmax(np.abs(yf_psi[1:N//2])) + 1
+
+        # Get second dominant frequency for potential harmonics
+        idx_phi_2nd = np.argsort(np.abs(yf_phi[1:N//2]))[-2] + 1
+        idx_theta_2nd = np.argsort(np.abs(yf_theta[1:N//2]))[-2] + 1
+        idx_psi_2nd = np.argsort(np.abs(yf_psi[1:N//2]))[-2] + 1
+        
+        print("\n----- FFT Frequencies -----")
+        print(f"Phi (Roll)   : {1/xf[idx_phi]:.3f} Sec")
+        print(f"Phi 2nd      : {1/xf[idx_phi_2nd]:.3f} Sec")
+        print(f"Theta (Pitch): {1/xf[idx_theta]:.3f} Sec")
+        print(f"Theta 2nd    : {1/xf[idx_theta_2nd]:.3f} Sec")
+        print(f"Psi (Yaw)    : {1/xf[idx_psi]:.3f} Sec")
+        print(f"Psi 2nd      : {1/xf[idx_psi_2nd]:.3f} Sec")
+        print("---------------------------")
+    
+    if not show_graphs:
+        return
+        
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.canvas.manager.set_window_title('UKF Estimated IMU Angles')
+    
+    ax.plot(t_sec, angles_deg[:, 0], label='phi_imu (Roll)', color='red')
+    ax.plot(t_sec, angles_deg[:, 1], label='theta_imu (Pitch)', color='green')
+    ax.plot(t_sec, angles_deg[:, 2], label='psi_imu (Yaw)', color='blue')
+    
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Angle (degrees)')
+    ax.set_title('IMU Angles Estimated by UKF over Time')
+    ax.legend()
+    ax.grid(True)
+    plt.tight_layout()
 
 def visualize_ukf_results(ukf_data, ref_data, camera_data, use_2d=False):
     """Create an animated visualization of UKF vs Reference position data."""

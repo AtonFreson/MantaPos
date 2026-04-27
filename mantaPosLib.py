@@ -1582,14 +1582,22 @@ class MantaUKF:
 
         # Process Noise Q and Measurement Noise Matrices R
         self.Q = np.eye(self.L) * 0.001
+        # Increase process noise for Y and Vy so it relies less on IMU prediction
+        self.Q[0, 0] = 0.01 # y
+        self.Q[2, 2] = 0.01 # v_y
+        
         # Inflate process noise slightly for angles to allow them to flexibly converge
         for i in range(4, 10):
             self.Q[i, i] = 1e-4
             
-        # Camera position measurement covariance for coupled updates (X, Y, Z). X error confirmed to ~+-3cm
-        self.R_cam = np.diag(np.ones(3) * 0.01)
+        # Camera position measurement covariance. Note: X error confirmed to ~+-3cm.
+        self.R_cam = np.diag(np.ones(3) * 0.05)
+        # Tighten Y since the camera is the only source for Y.
+        self.R_cam[1, 1] = 0.05 # y        #0.01
+
         # Pressure sensor measurement covariance.
-        self.R_pressure = np.diag(np.ones(2) * 0.005) # Generally the Z Anchor (dual due to two sensors)
+        self.R_pressure = np.diag(np.ones(2) * 0.001) # Generally the Z Anchor (dual due to two sensors). Note: Maybe too low....
+
         # Measurement noise for stationary accelerometer assumption.
         self.R_accel = np.diag(np.ones(3) * 0.5)
 
