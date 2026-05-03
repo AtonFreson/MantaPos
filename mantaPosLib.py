@@ -1588,7 +1588,9 @@ class MantaUKF:
         
         # Inflate process noise slightly for angles to allow them to flexibly converge
         for i in range(4, 10):
-            self.Q[i, i] = 1e-4
+            # Tell UKF these are static constants (rigid mounting offsets), not physically moving states.
+            # Using 1e-10 instead of exact 0 to prevent matrix singularity during sigma point generation.
+            self.Q[i, i] = 1e-10 # instead of 1e-4
             
         # Camera position measurement covariance. Note: X error confirmed to ~+-3cm.
         self.R_cam = np.diag(np.ones(3) * 0.05)
@@ -1599,7 +1601,8 @@ class MantaUKF:
         self.R_pressure = np.diag(np.ones(2) * 0.001) # Generally the Z Anchor (dual due to two sensors). Note: Maybe too low....
 
         # Measurement noise for stationary accelerometer assumption.
-        self.R_accel = np.diag(np.ones(3) * 0.5)
+        # High value prevents linear track acceleration from artificially swinging the assumed pitch/roll
+        self.R_accel = np.diag(np.ones(3) * 5.0) # 0.5 for stationary assumption.
 
         # Direct (uncoupled) Y/Z updates reuse the same diagonal terms for consistency.
         self.R_cam_yz = self.R_cam[np.ix_([1, 2], [1, 2])]
@@ -1706,6 +1709,10 @@ class MantaUKF:
 
         # 5. State and Covariance Update
         self.x = self.x + K @ (z_meas - z_mean)
+        
+        # Manually lock unobservable IMU Yaw to 0 to prevent floating-point accumulation drift
+        #self.x[6] = 0.0
+        
         self.P = self.P - K @ P_yy @ K.T
 
     def update_pressure(self, press_z_array):
